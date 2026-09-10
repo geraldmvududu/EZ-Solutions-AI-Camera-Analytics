@@ -30,7 +30,7 @@ function CameraTile({ camera, onExpand }: { camera: Camera; onExpand: () => void
         ) : (
           <span className="text-slate-600 text-sm">{canStream ? "Stream unavailable" : "Camera offline"}</span>
         )}
-        <div className="absolute top-1.5 left-1.5 flex gap-1">
+        <div className="absolute bottom-1.5 left-1.5 flex gap-1">
           {camera.ai_enabled && <span className="text-[10px] bg-black/60 text-accent-500 px-1.5 py-0.5 rounded">AI</span>}
           {camera.recording_enabled && <span className="text-[10px] bg-black/60 text-severity-critical px-1.5 py-0.5 rounded">REC</span>}
         </div>
