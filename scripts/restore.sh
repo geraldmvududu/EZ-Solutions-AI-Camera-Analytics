@@ -20,7 +20,8 @@ if [[ "$confirm" != "y" && "$confirm" != "Y" ]]; then
     exit 0
 fi
 
-source .env
+POSTGRES_USER=$(grep -m1 '^POSTGRES_USER=' .env | cut -d= -f2- | tr -d "\"'" || true)
+POSTGRES_DB=$(grep -m1 '^POSTGRES_DB=' .env | cut -d= -f2- | tr -d "\"'" || true)
 
 echo "Restoring PostgreSQL database..."
 gunzip -c "$BACKUP_DIR/database.sql.gz" | docker compose exec -T postgres psql -U "${POSTGRES_USER:-ezsolutions}" "${POSTGRES_DB:-ez_camera_analytics}"

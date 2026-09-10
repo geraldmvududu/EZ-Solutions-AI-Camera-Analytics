@@ -13,7 +13,8 @@ BACKUP_DIR="backups/$TIMESTAMP"
 mkdir -p "$BACKUP_DIR"
 
 echo "Backing up PostgreSQL database..."
-source .env
+POSTGRES_USER=$(grep -m1 '^POSTGRES_USER=' .env | cut -d= -f2- | tr -d "\"'" || true)
+POSTGRES_DB=$(grep -m1 '^POSTGRES_DB=' .env | cut -d= -f2- | tr -d "\"'" || true)
 docker compose exec -T postgres pg_dump -U "${POSTGRES_USER:-ezsolutions}" "${POSTGRES_DB:-ez_camera_analytics}" \
     | gzip > "$BACKUP_DIR/database.sql.gz"
 
