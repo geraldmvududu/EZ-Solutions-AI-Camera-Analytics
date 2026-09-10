@@ -210,6 +210,22 @@ ai-engine), `AI_DEVICE` (cpu — GPU is an optional future path, never required)
 
 ## Verified end-to-end (not just "should work")
 
+- **Real deployment to a real Ubuntu Server VM + real Postgres**, not just local
+  SQLite testing. This surfaced a genuine bug SQLite testing couldn't have caught:
+  `events`/`detections`/`snapshots`/`recordings` form a circular FK reference
+  (Snapshot -> Event -> Detection -> Snapshot). SQLite never enforces FK targets at
+  CREATE TABLE time, so `alembic upgrade head` "worked" in every local test run; a real
+  Postgres correctly rejected it (`relation "recordings" does not exist`) partway
+  through the initial migration. Fixed by moving the six cyclic FK columns to separate
+  `ALTER TABLE` statements issued after every table exists (`op.create_foreign_key`,
+  skipped on SQLite since it can't ALTER in a constraint outside of Alembic's batch
+  mode, and never needed it enforced anyway). Also found and fixed along the way: a
+  `.gitkeep` placeholder in `data/postgres/` that broke Postgres's `initdb` (it refuses
+  to initialize a non-empty directory), and undocumented URL-breaking behavior when
+  `POSTGRES_PASSWORD` contains `@` (it's interpolated unescaped into `DATABASE_URL`,
+  so a password like `Ellah@0712` made the backend try to resolve a garbled hostname
+  instead of `postgres` — confusing because a literal `getent hosts postgres` always
+  resolved fine, since the app was never actually asking for that literal string).
 - Full auth flow (login/refresh/logout) against a real backend + real frontend in a
   browser.
 - RBAC enforcement: VIEWER blocked (403) from camera/user management; ADMIN allowed.
