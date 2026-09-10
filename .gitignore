@@ -4,6 +4,9 @@
 *.env
 
 # Data volumes (real recordings/snapshots/db files must never be committed)
+# NOTE: data/postgres/ deliberately has NO .gitkeep exception — Postgres's initdb
+# refuses to initialize a data directory that isn't completely empty, even if the
+# only thing in it is a hidden placeholder file. Keep this directory git-empty.
 data/postgres/*
 data/recordings/*
 data/snapshots/*
@@ -11,7 +14,11 @@ data/uploads/*
 data/models/*
 data/logs/*
 data/nginx-certs/*
-!data/**/.gitkeep
+!data/recordings/.gitkeep
+!data/snapshots/.gitkeep
+!data/uploads/.gitkeep
+!data/models/.gitkeep
+!data/logs/.gitkeep
 backups/
 
 # Large binary assets
@@ -57,6 +64,9 @@ mobile/node_modules/
 .idea/
 .DS_Store
 Thumbs.db
+
+# Claude Code session runtime artifacts
+.claude/scheduled_tasks.lock
 
 # Logs
 *.log
