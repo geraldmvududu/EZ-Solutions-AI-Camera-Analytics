@@ -55,6 +55,7 @@ services:
     volumes:
       - ./data/recordings:/data/recordings
       - ./data/snapshots:/data/snapshots
+      - ./data/uploads:/data/uploads:ro
       - ./data/models:/data/models
       - ./videos:/videos:ro
     depends_on:

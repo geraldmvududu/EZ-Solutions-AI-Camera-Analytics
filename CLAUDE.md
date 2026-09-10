@@ -225,7 +225,13 @@ ai-engine), `AI_DEVICE` (cpu — GPU is an optional future path, never required)
   `POSTGRES_PASSWORD` contains `@` (it's interpolated unescaped into `DATABASE_URL`,
   so a password like `Ellah@0712` made the backend try to resolve a garbled hostname
   instead of `postgres` — confusing because a literal `getent hosts postgres` always
-  resolved fine, since the app was never actually asking for that literal string).
+  resolved fine, since the app was never actually asking for that literal string). Also
+  found: `docker-compose.yml`'s `ai-engine` service was missing a mount for
+  `./data/uploads` (the backend had it; ai-engine — the service that actually needs to
+  *read* an uploaded VIDEO_FILE camera's video — didn't), so every VIDEO_FILE camera
+  pointed at `/data/uploads/...` failed with "Could not open video source" and the
+  camera stayed OFFLINE forever. Fixed by adding the mount (read-only, since ai-engine
+  never writes there).
 - Full auth flow (login/refresh/logout) against a real backend + real frontend in a
   browser.
 - RBAC enforcement: VIEWER blocked (403) from camera/user management; ADMIN allowed.
