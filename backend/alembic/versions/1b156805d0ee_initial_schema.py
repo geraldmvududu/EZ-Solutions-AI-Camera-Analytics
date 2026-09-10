@@ -1,8 +1,8 @@
 """initial schema
 
-Revision ID: ed500c1378b9
+Revision ID: 1b156805d0ee
 Revises: 
-Create Date: 2026-09-10 02:32:31.974366
+Create Date: 2026-09-10 17:17:52.734263
 
 """
 from typing import Sequence, Union
@@ -12,7 +12,7 @@ import sqlalchemy as sa
 
 
 # revision identifiers, used by Alembic.
-revision: str = 'ed500c1378b9'
+revision: str = '1b156805d0ee'
 down_revision: Union[str, None] = None
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
@@ -54,62 +54,6 @@ def upgrade() -> None:
     )
     op.create_index(op.f('ix_cameras_camera_code'), 'cameras', ['camera_code'], unique=False)
     op.create_index(op.f('ix_cameras_tenant_id'), 'cameras', ['tenant_id'], unique=False)
-    op.create_table('detections',
-    sa.Column('camera_id', sa.Uuid(), nullable=False),
-    sa.Column('object_type', sa.Enum('PERSON', 'CAR', 'TRUCK', 'BUS', 'MOTORCYCLE', 'BICYCLE', 'ANIMAL', 'BACKPACK', 'BAG', 'SUITCASE', name='objecttype'), nullable=False),
-    sa.Column('confidence', sa.Float(), nullable=False),
-    sa.Column('bbox_x', sa.Float(), nullable=False),
-    sa.Column('bbox_y', sa.Float(), nullable=False),
-    sa.Column('bbox_width', sa.Float(), nullable=False),
-    sa.Column('bbox_height', sa.Float(), nullable=False),
-    sa.Column('tracking_id', sa.Integer(), nullable=False),
-    sa.Column('frame_number', sa.Integer(), nullable=False),
-    sa.Column('detected_at', sa.DateTime(timezone=True), nullable=False),
-    sa.Column('snapshot_id', sa.Uuid(), nullable=True),
-    sa.Column('recording_id', sa.Uuid(), nullable=True),
-    sa.Column('id', sa.Uuid(), nullable=False),
-    sa.Column('created_at', sa.DateTime(timezone=True), nullable=False),
-    sa.Column('updated_at', sa.DateTime(timezone=True), nullable=False),
-    sa.Column('tenant_id', sa.Uuid(), nullable=False),
-    sa.ForeignKeyConstraint(['camera_id'], ['cameras.id'], ),
-    sa.ForeignKeyConstraint(['recording_id'], ['recordings.id'], ),
-    sa.ForeignKeyConstraint(['snapshot_id'], ['snapshots.id'], ),
-    sa.PrimaryKeyConstraint('id')
-    )
-    op.create_index(op.f('ix_detections_camera_id'), 'detections', ['camera_id'], unique=False)
-    op.create_index(op.f('ix_detections_detected_at'), 'detections', ['detected_at'], unique=False)
-    op.create_index(op.f('ix_detections_object_type'), 'detections', ['object_type'], unique=False)
-    op.create_index(op.f('ix_detections_tenant_id'), 'detections', ['tenant_id'], unique=False)
-    op.create_index(op.f('ix_detections_tracking_id'), 'detections', ['tracking_id'], unique=False)
-    op.create_table('events',
-    sa.Column('camera_id', sa.Uuid(), nullable=False),
-    sa.Column('event_type', sa.Enum('PERSON_DETECTED', 'VEHICLE_DETECTED', 'MOTION_DETECTED', 'TRIPWIRE_VIOLATION', 'INTRUSION_DETECTED', 'LOITERING_DETECTED', 'CAMERA_OFFLINE', 'CAMERA_ONLINE', 'RECORDING_FAILURE', 'AI_DETECTION', name='eventtype'), nullable=False),
-    sa.Column('severity', sa.Enum('INFO', 'LOW', 'MEDIUM', 'HIGH', 'CRITICAL', name='eventseverity'), nullable=False),
-    sa.Column('description', sa.String(length=1000), nullable=False),
-    sa.Column('detection_id', sa.Uuid(), nullable=True),
-    sa.Column('zone_id', sa.Uuid(), nullable=True),
-    sa.Column('tripwire_id', sa.Uuid(), nullable=True),
-    sa.Column('snapshot_id', sa.Uuid(), nullable=True),
-    sa.Column('recording_id', sa.Uuid(), nullable=True),
-    sa.Column('occurred_at', sa.DateTime(timezone=True), nullable=False),
-    sa.Column('event_metadata', sa.JSON(), nullable=False),
-    sa.Column('is_demo', sa.Boolean(), nullable=False),
-    sa.Column('id', sa.Uuid(), nullable=False),
-    sa.Column('created_at', sa.DateTime(timezone=True), nullable=False),
-    sa.Column('updated_at', sa.DateTime(timezone=True), nullable=False),
-    sa.Column('tenant_id', sa.Uuid(), nullable=False),
-    sa.ForeignKeyConstraint(['camera_id'], ['cameras.id'], ),
-    sa.ForeignKeyConstraint(['detection_id'], ['detections.id'], ),
-    sa.ForeignKeyConstraint(['recording_id'], ['recordings.id'], ),
-    sa.ForeignKeyConstraint(['snapshot_id'], ['snapshots.id'], ),
-    sa.ForeignKeyConstraint(['tripwire_id'], ['tripwires.id'], ),
-    sa.ForeignKeyConstraint(['zone_id'], ['zones.id'], ),
-    sa.PrimaryKeyConstraint('id')
-    )
-    op.create_index(op.f('ix_events_camera_id'), 'events', ['camera_id'], unique=False)
-    op.create_index(op.f('ix_events_event_type'), 'events', ['event_type'], unique=False)
-    op.create_index(op.f('ix_events_occurred_at'), 'events', ['occurred_at'], unique=False)
-    op.create_index(op.f('ix_events_tenant_id'), 'events', ['tenant_id'], unique=False)
     op.create_table('permissions',
     sa.Column('code', sa.String(length=100), nullable=False),
     sa.Column('description', sa.String(length=255), nullable=False),
@@ -126,25 +70,6 @@ def upgrade() -> None:
     sa.PrimaryKeyConstraint('id')
     )
     op.create_index(op.f('ix_roles_name'), 'roles', ['name'], unique=True)
-    op.create_table('snapshots',
-    sa.Column('camera_id', sa.Uuid(), nullable=False),
-    sa.Column('event_id', sa.Uuid(), nullable=True),
-    sa.Column('file_path', sa.String(length=1000), nullable=False),
-    sa.Column('taken_at', sa.DateTime(timezone=True), nullable=False),
-    sa.Column('object_type', sa.String(length=50), nullable=False),
-    sa.Column('confidence', sa.Float(), nullable=True),
-    sa.Column('id', sa.Uuid(), nullable=False),
-    sa.Column('created_at', sa.DateTime(timezone=True), nullable=False),
-    sa.Column('updated_at', sa.DateTime(timezone=True), nullable=False),
-    sa.Column('tenant_id', sa.Uuid(), nullable=False),
-    sa.ForeignKeyConstraint(['camera_id'], ['cameras.id'], ),
-    sa.ForeignKeyConstraint(['event_id'], ['events.id'], ),
-    sa.PrimaryKeyConstraint('id')
-    )
-    op.create_index(op.f('ix_snapshots_camera_id'), 'snapshots', ['camera_id'], unique=False)
-    op.create_index(op.f('ix_snapshots_event_id'), 'snapshots', ['event_id'], unique=False)
-    op.create_index(op.f('ix_snapshots_taken_at'), 'snapshots', ['taken_at'], unique=False)
-    op.create_index(op.f('ix_snapshots_tenant_id'), 'snapshots', ['tenant_id'], unique=False)
     op.create_table('system_health',
     sa.Column('component', sa.String(length=50), nullable=False),
     sa.Column('status', sa.Enum('HEALTHY', 'WARNING', 'CRITICAL', name='healthstatus'), nullable=False),
@@ -200,6 +125,31 @@ def upgrade() -> None:
     sa.PrimaryKeyConstraint('id')
     )
     op.create_index(op.f('ix_camera_streams_camera_id'), 'camera_streams', ['camera_id'], unique=False)
+    op.create_table('detections',
+    sa.Column('camera_id', sa.Uuid(), nullable=False),
+    sa.Column('object_type', sa.Enum('PERSON', 'CAR', 'TRUCK', 'BUS', 'MOTORCYCLE', 'BICYCLE', 'ANIMAL', 'BACKPACK', 'BAG', 'SUITCASE', name='objecttype'), nullable=False),
+    sa.Column('confidence', sa.Float(), nullable=False),
+    sa.Column('bbox_x', sa.Float(), nullable=False),
+    sa.Column('bbox_y', sa.Float(), nullable=False),
+    sa.Column('bbox_width', sa.Float(), nullable=False),
+    sa.Column('bbox_height', sa.Float(), nullable=False),
+    sa.Column('tracking_id', sa.Integer(), nullable=False),
+    sa.Column('frame_number', sa.Integer(), nullable=False),
+    sa.Column('detected_at', sa.DateTime(timezone=True), nullable=False),
+    sa.Column('snapshot_id', sa.Uuid(), nullable=True),
+    sa.Column('recording_id', sa.Uuid(), nullable=True),
+    sa.Column('id', sa.Uuid(), nullable=False),
+    sa.Column('created_at', sa.DateTime(timezone=True), nullable=False),
+    sa.Column('updated_at', sa.DateTime(timezone=True), nullable=False),
+    sa.Column('tenant_id', sa.Uuid(), nullable=False),
+    sa.ForeignKeyConstraint(['camera_id'], ['cameras.id'], ),
+    sa.PrimaryKeyConstraint('id')
+    )
+    op.create_index(op.f('ix_detections_camera_id'), 'detections', ['camera_id'], unique=False)
+    op.create_index(op.f('ix_detections_detected_at'), 'detections', ['detected_at'], unique=False)
+    op.create_index(op.f('ix_detections_object_type'), 'detections', ['object_type'], unique=False)
+    op.create_index(op.f('ix_detections_tenant_id'), 'detections', ['tenant_id'], unique=False)
+    op.create_index(op.f('ix_detections_tracking_id'), 'detections', ['tracking_id'], unique=False)
     op.create_table('role_permissions',
     sa.Column('role_id', sa.Uuid(), nullable=False),
     sa.Column('permission_id', sa.Uuid(), nullable=False),
@@ -207,6 +157,24 @@ def upgrade() -> None:
     sa.ForeignKeyConstraint(['role_id'], ['roles.id'], ),
     sa.PrimaryKeyConstraint('role_id', 'permission_id')
     )
+    op.create_table('snapshots',
+    sa.Column('camera_id', sa.Uuid(), nullable=False),
+    sa.Column('event_id', sa.Uuid(), nullable=True),
+    sa.Column('file_path', sa.String(length=1000), nullable=False),
+    sa.Column('taken_at', sa.DateTime(timezone=True), nullable=False),
+    sa.Column('object_type', sa.String(length=50), nullable=False),
+    sa.Column('confidence', sa.Float(), nullable=True),
+    sa.Column('id', sa.Uuid(), nullable=False),
+    sa.Column('created_at', sa.DateTime(timezone=True), nullable=False),
+    sa.Column('updated_at', sa.DateTime(timezone=True), nullable=False),
+    sa.Column('tenant_id', sa.Uuid(), nullable=False),
+    sa.ForeignKeyConstraint(['camera_id'], ['cameras.id'], ),
+    sa.PrimaryKeyConstraint('id')
+    )
+    op.create_index(op.f('ix_snapshots_camera_id'), 'snapshots', ['camera_id'], unique=False)
+    op.create_index(op.f('ix_snapshots_event_id'), 'snapshots', ['event_id'], unique=False)
+    op.create_index(op.f('ix_snapshots_taken_at'), 'snapshots', ['taken_at'], unique=False)
+    op.create_index(op.f('ix_snapshots_tenant_id'), 'snapshots', ['tenant_id'], unique=False)
     op.create_table('tripwires',
     sa.Column('camera_id', sa.Uuid(), nullable=False),
     sa.Column('name', sa.String(length=255), nullable=False),
@@ -274,6 +242,32 @@ def upgrade() -> None:
     op.create_index(op.f('ix_audit_logs_created_at'), 'audit_logs', ['created_at'], unique=False)
     op.create_index(op.f('ix_audit_logs_tenant_id'), 'audit_logs', ['tenant_id'], unique=False)
     op.create_index(op.f('ix_audit_logs_user_id'), 'audit_logs', ['user_id'], unique=False)
+    op.create_table('events',
+    sa.Column('camera_id', sa.Uuid(), nullable=False),
+    sa.Column('event_type', sa.Enum('PERSON_DETECTED', 'VEHICLE_DETECTED', 'MOTION_DETECTED', 'TRIPWIRE_VIOLATION', 'INTRUSION_DETECTED', 'LOITERING_DETECTED', 'CAMERA_OFFLINE', 'CAMERA_ONLINE', 'RECORDING_FAILURE', 'AI_DETECTION', name='eventtype'), nullable=False),
+    sa.Column('severity', sa.Enum('INFO', 'LOW', 'MEDIUM', 'HIGH', 'CRITICAL', name='eventseverity'), nullable=False),
+    sa.Column('description', sa.String(length=1000), nullable=False),
+    sa.Column('detection_id', sa.Uuid(), nullable=True),
+    sa.Column('zone_id', sa.Uuid(), nullable=True),
+    sa.Column('tripwire_id', sa.Uuid(), nullable=True),
+    sa.Column('snapshot_id', sa.Uuid(), nullable=True),
+    sa.Column('recording_id', sa.Uuid(), nullable=True),
+    sa.Column('occurred_at', sa.DateTime(timezone=True), nullable=False),
+    sa.Column('event_metadata', sa.JSON(), nullable=False),
+    sa.Column('is_demo', sa.Boolean(), nullable=False),
+    sa.Column('id', sa.Uuid(), nullable=False),
+    sa.Column('created_at', sa.DateTime(timezone=True), nullable=False),
+    sa.Column('updated_at', sa.DateTime(timezone=True), nullable=False),
+    sa.Column('tenant_id', sa.Uuid(), nullable=False),
+    sa.ForeignKeyConstraint(['camera_id'], ['cameras.id'], ),
+    sa.ForeignKeyConstraint(['tripwire_id'], ['tripwires.id'], ),
+    sa.ForeignKeyConstraint(['zone_id'], ['zones.id'], ),
+    sa.PrimaryKeyConstraint('id')
+    )
+    op.create_index(op.f('ix_events_camera_id'), 'events', ['camera_id'], unique=False)
+    op.create_index(op.f('ix_events_event_type'), 'events', ['event_type'], unique=False)
+    op.create_index(op.f('ix_events_occurred_at'), 'events', ['occurred_at'], unique=False)
+    op.create_index(op.f('ix_events_tenant_id'), 'events', ['tenant_id'], unique=False)
     op.create_table('incidents',
     sa.Column('title', sa.String(length=255), nullable=False),
     sa.Column('description', sa.String(length=4000), nullable=False),
@@ -293,6 +287,21 @@ def upgrade() -> None:
     )
     op.create_index(op.f('ix_incidents_status'), 'incidents', ['status'], unique=False)
     op.create_index(op.f('ix_incidents_tenant_id'), 'incidents', ['tenant_id'], unique=False)
+    op.create_table('push_tokens',
+    sa.Column('user_id', sa.Uuid(), nullable=False),
+    sa.Column('token', sa.String(length=255), nullable=False),
+    sa.Column('platform', sa.String(length=20), nullable=False),
+    sa.Column('id', sa.Uuid(), nullable=False),
+    sa.Column('created_at', sa.DateTime(timezone=True), nullable=False),
+    sa.Column('updated_at', sa.DateTime(timezone=True), nullable=False),
+    sa.Column('tenant_id', sa.Uuid(), nullable=False),
+    sa.ForeignKeyConstraint(['user_id'], ['users.id'], ),
+    sa.PrimaryKeyConstraint('id'),
+    sa.UniqueConstraint('user_id', 'token', name='uq_push_token_user_token')
+    )
+    op.create_index(op.f('ix_push_tokens_tenant_id'), 'push_tokens', ['tenant_id'], unique=False)
+    op.create_index(op.f('ix_push_tokens_token'), 'push_tokens', ['token'], unique=False)
+    op.create_index(op.f('ix_push_tokens_user_id'), 'push_tokens', ['user_id'], unique=False)
     op.create_table('recordings',
     sa.Column('camera_id', sa.Uuid(), nullable=False),
     sa.Column('file_path', sa.String(length=1000), nullable=False),
@@ -389,8 +398,38 @@ def upgrade() -> None:
     op.create_index(op.f('ix_notifications_user_id'), 'notifications', ['user_id'], unique=False)
     # ### end Alembic commands ###
 
+    # events/detections/snapshots/recordings form a reference cycle (e.g. Snapshot ->
+    # Event -> Detection -> Snapshot). SQLite never enforces FK targets at CREATE TABLE
+    # time, so autogenerate's normal inline-constraint rendering worked fine there —
+    # but Postgres does enforce it, and fails with "relation does not exist" on
+    # whichever table hadn't been created yet. These six were pulled out of their
+    # create_table() calls above and added here instead, once every table exists.
+    #
+    # SQLite has no ALTER-based way to add a FK constraint to an existing table at all
+    # (only Alembic's "batch mode" copy-and-move strategy supports that, which is
+    # overkill here) — and since SQLite was already running fine without these six
+    # constraints physically enforced, just skip this block there rather than add
+    # batch-mode complexity for a constraint SQLite wouldn't check anyway.
+    if op.get_bind().dialect.name != "sqlite":
+        op.create_foreign_key('fk_detections_recording_id', 'detections', 'recordings', ['recording_id'], ['id'])
+        op.create_foreign_key('fk_detections_snapshot_id', 'detections', 'snapshots', ['snapshot_id'], ['id'])
+        op.create_foreign_key('fk_snapshots_event_id', 'snapshots', 'events', ['event_id'], ['id'])
+        op.create_foreign_key('fk_events_detection_id', 'events', 'detections', ['detection_id'], ['id'])
+        op.create_foreign_key('fk_events_recording_id', 'events', 'recordings', ['recording_id'], ['id'])
+        op.create_foreign_key('fk_events_snapshot_id', 'events', 'snapshots', ['snapshot_id'], ['id'])
+
 
 def downgrade() -> None:
+    # Drop the deferred cyclic FKs first — several of the drop_table calls below would
+    # otherwise fail while one of these constraints still references that table.
+    if op.get_bind().dialect.name != "sqlite":
+        op.drop_constraint('fk_events_snapshot_id', 'events', type_='foreignkey')
+        op.drop_constraint('fk_events_recording_id', 'events', type_='foreignkey')
+        op.drop_constraint('fk_events_detection_id', 'events', type_='foreignkey')
+        op.drop_constraint('fk_snapshots_event_id', 'snapshots', type_='foreignkey')
+        op.drop_constraint('fk_detections_snapshot_id', 'detections', type_='foreignkey')
+        op.drop_constraint('fk_detections_recording_id', 'detections', type_='foreignkey')
+
     # ### commands auto generated by Alembic - please adjust! ###
     op.drop_index(op.f('ix_notifications_user_id'), table_name='notifications')
     op.drop_index(op.f('ix_notifications_tenant_id'), table_name='notifications')
@@ -409,9 +448,18 @@ def downgrade() -> None:
     op.drop_index(op.f('ix_recordings_started_at'), table_name='recordings')
     op.drop_index(op.f('ix_recordings_camera_id'), table_name='recordings')
     op.drop_table('recordings')
+    op.drop_index(op.f('ix_push_tokens_user_id'), table_name='push_tokens')
+    op.drop_index(op.f('ix_push_tokens_token'), table_name='push_tokens')
+    op.drop_index(op.f('ix_push_tokens_tenant_id'), table_name='push_tokens')
+    op.drop_table('push_tokens')
     op.drop_index(op.f('ix_incidents_tenant_id'), table_name='incidents')
     op.drop_index(op.f('ix_incidents_status'), table_name='incidents')
     op.drop_table('incidents')
+    op.drop_index(op.f('ix_events_tenant_id'), table_name='events')
+    op.drop_index(op.f('ix_events_occurred_at'), table_name='events')
+    op.drop_index(op.f('ix_events_event_type'), table_name='events')
+    op.drop_index(op.f('ix_events_camera_id'), table_name='events')
+    op.drop_table('events')
     op.drop_index(op.f('ix_audit_logs_user_id'), table_name='audit_logs')
     op.drop_index(op.f('ix_audit_logs_tenant_id'), table_name='audit_logs')
     op.drop_index(op.f('ix_audit_logs_created_at'), table_name='audit_logs')
@@ -426,7 +474,18 @@ def downgrade() -> None:
     op.drop_index(op.f('ix_tripwires_tenant_id'), table_name='tripwires')
     op.drop_index(op.f('ix_tripwires_camera_id'), table_name='tripwires')
     op.drop_table('tripwires')
+    op.drop_index(op.f('ix_snapshots_tenant_id'), table_name='snapshots')
+    op.drop_index(op.f('ix_snapshots_taken_at'), table_name='snapshots')
+    op.drop_index(op.f('ix_snapshots_event_id'), table_name='snapshots')
+    op.drop_index(op.f('ix_snapshots_camera_id'), table_name='snapshots')
+    op.drop_table('snapshots')
     op.drop_table('role_permissions')
+    op.drop_index(op.f('ix_detections_tracking_id'), table_name='detections')
+    op.drop_index(op.f('ix_detections_tenant_id'), table_name='detections')
+    op.drop_index(op.f('ix_detections_object_type'), table_name='detections')
+    op.drop_index(op.f('ix_detections_detected_at'), table_name='detections')
+    op.drop_index(op.f('ix_detections_camera_id'), table_name='detections')
+    op.drop_table('detections')
     op.drop_index(op.f('ix_camera_streams_camera_id'), table_name='camera_streams')
     op.drop_table('camera_streams')
     op.drop_index(op.f('ix_ai_rules_tenant_id'), table_name='ai_rules')
@@ -436,26 +495,10 @@ def downgrade() -> None:
     op.drop_index(op.f('ix_system_health_component'), table_name='system_health')
     op.drop_index(op.f('ix_system_health_checked_at'), table_name='system_health')
     op.drop_table('system_health')
-    op.drop_index(op.f('ix_snapshots_tenant_id'), table_name='snapshots')
-    op.drop_index(op.f('ix_snapshots_taken_at'), table_name='snapshots')
-    op.drop_index(op.f('ix_snapshots_event_id'), table_name='snapshots')
-    op.drop_index(op.f('ix_snapshots_camera_id'), table_name='snapshots')
-    op.drop_table('snapshots')
     op.drop_index(op.f('ix_roles_name'), table_name='roles')
     op.drop_table('roles')
     op.drop_index(op.f('ix_permissions_code'), table_name='permissions')
     op.drop_table('permissions')
-    op.drop_index(op.f('ix_events_tenant_id'), table_name='events')
-    op.drop_index(op.f('ix_events_occurred_at'), table_name='events')
-    op.drop_index(op.f('ix_events_event_type'), table_name='events')
-    op.drop_index(op.f('ix_events_camera_id'), table_name='events')
-    op.drop_table('events')
-    op.drop_index(op.f('ix_detections_tracking_id'), table_name='detections')
-    op.drop_index(op.f('ix_detections_tenant_id'), table_name='detections')
-    op.drop_index(op.f('ix_detections_object_type'), table_name='detections')
-    op.drop_index(op.f('ix_detections_detected_at'), table_name='detections')
-    op.drop_index(op.f('ix_detections_camera_id'), table_name='detections')
-    op.drop_table('detections')
     op.drop_index(op.f('ix_cameras_tenant_id'), table_name='cameras')
     op.drop_index(op.f('ix_cameras_camera_code'), table_name='cameras')
     op.drop_table('cameras')

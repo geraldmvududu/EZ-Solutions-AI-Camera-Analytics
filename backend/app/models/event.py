@@ -38,11 +38,21 @@ class Event(Base, UUIDPKMixin, TimestampMixin, TenantScopedMixin):
     severity: Mapped[EventSeverity] = mapped_column(Enum(EventSeverity), default=EventSeverity.INFO, nullable=False)
     description: Mapped[str] = mapped_column(String(1000), nullable=False, default="")
 
-    detection_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("detections.id"), nullable=True)
+    # use_alter=True on detection/snapshot/recording: these three plus events form a
+    # reference cycle (see app/models/detection.py's comment) — Postgres enforces FK
+    # targets at CREATE TABLE time, so these are deferred to a post-creation ALTER
+    # TABLE. zone/tripwire aren't part of the cycle and don't need this.
+    detection_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("detections.id", use_alter=True, name="fk_events_detection_id"), nullable=True
+    )
     zone_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("zones.id"), nullable=True)
     tripwire_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("tripwires.id"), nullable=True)
-    snapshot_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("snapshots.id"), nullable=True)
-    recording_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("recordings.id"), nullable=True)
+    snapshot_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("snapshots.id", use_alter=True, name="fk_events_snapshot_id"), nullable=True
+    )
+    recording_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("recordings.id", use_alter=True, name="fk_events_recording_id"), nullable=True
+    )
 
     occurred_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, index=True)
     event_metadata: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)

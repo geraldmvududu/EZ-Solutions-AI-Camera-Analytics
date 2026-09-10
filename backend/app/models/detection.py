@@ -39,5 +39,13 @@ class Detection(Base, UUIDPKMixin, TimestampMixin, TenantScopedMixin):
     frame_number: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     detected_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, index=True)
 
-    snapshot_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("snapshots.id"), nullable=True)
-    recording_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("recordings.id"), nullable=True)
+    # use_alter=True: detections/snapshots/events/recordings form a reference cycle
+    # (e.g. Snapshot -> Event -> Detection -> Snapshot), which SQLite never enforces at
+    # CREATE TABLE time but Postgres does. use_alter defers these specific constraints
+    # to a separate ALTER TABLE, emitted after every table exists, breaking the cycle.
+    snapshot_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("snapshots.id", use_alter=True, name="fk_detections_snapshot_id"), nullable=True
+    )
+    recording_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("recordings.id", use_alter=True, name="fk_detections_recording_id"), nullable=True
+    )
