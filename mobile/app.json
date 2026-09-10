@@ -1,0 +1,27 @@
+{
+  "expo": {
+    "name": "EZ Solutions AI Camera Analytics",
+    "slug": "ez-camera-analytics",
+    "version": "0.1.0",
+    "orientation": "portrait",
+    "userInterfaceStyle": "dark",
+    "splash": {
+      "backgroundColor": "#0a0e14"
+    },
+    "android": {
+      "package": "com.ezsolutions.cameraanalytics",
+      "permissions": ["INTERNET"]
+    },
+    "ios": {
+      "bundleIdentifier": "com.ezsolutions.cameraanalytics"
+    },
+    "plugins": [
+      [
+        "expo-notifications",
+        {
+          "color": "#14b8a6"
+        }
+      ]
+    ]
+  }
+}

@@ -1,0 +1,103 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-ezsolutions}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-change_me_strong_password}
+      POSTGRES_DB: ${POSTGRES_DB:-ez_camera_analytics}
+    volumes:
+      - ./data/postgres:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-ezsolutions}"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    networks: [ez-internal]
+    # Not published to the host — only reachable from other containers (section 57).
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    networks: [ez-internal]
+    # Not published to the host (section 57).
+
+  backend:
+    build: ./backend
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-ezsolutions}:${POSTGRES_PASSWORD:-change_me_strong_password}@postgres:5432/${POSTGRES_DB:-ez_camera_analytics}
+      REDIS_URL: redis://redis:6379/0
+    volumes:
+      - ./data/recordings:/data/recordings
+      - ./data/snapshots:/data/snapshots
+      - ./data/uploads:/data/uploads
+      - ./data/models:/data/models
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks: [ez-internal]
+
+  ai-engine:
+    build: ./ai-engine
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      API_URL: http://backend:8000
+    volumes:
+      - ./data/recordings:/data/recordings
+      - ./data/snapshots:/data/snapshots
+      - ./data/models:/data/models
+      - ./videos:/videos:ro
+    depends_on:
+      - backend
+    networks: [ez-internal]
+
+  worker:
+    build: ./worker
+    restart: unless-stopped
+    environment:
+      DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-ezsolutions}:${POSTGRES_PASSWORD:-change_me_strong_password}@postgres:5432/${POSTGRES_DB:-ez_camera_analytics}
+      RETENTION_CHECK_INTERVAL_SECONDS: 3600
+    volumes:
+      - ./data/recordings:/data/recordings
+      - ./data/snapshots:/data/snapshots
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks: [ez-internal]
+
+  frontend:
+    build:
+      context: ./frontend
+      args:
+        VITE_API_URL: ""
+    restart: unless-stopped
+    depends_on:
+      - backend
+    networks: [ez-internal]
+
+  nginx:
+    build: ./nginx
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./data/nginx-certs:/etc/nginx/certs
+    depends_on:
+      - backend
+      - frontend
+    networks: [ez-internal]
+
+networks:
+  ez-internal:
+    driver: bridge

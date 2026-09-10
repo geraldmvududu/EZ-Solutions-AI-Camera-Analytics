@@ -1,0 +1,71 @@
+# Environment
+.env
+.env.local
+*.env
+
+# Data volumes (real recordings/snapshots/db files must never be committed)
+data/postgres/*
+data/recordings/*
+data/snapshots/*
+data/uploads/*
+data/models/*
+data/logs/*
+data/nginx-certs/*
+!data/**/.gitkeep
+backups/
+
+# Large binary assets
+models/*.pt
+models/*.onnx
+models/*.weights
+videos/*.mp4
+videos/*.avi
+videos/*.mov
+!videos/.gitkeep
+!models/.gitkeep
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.pytest_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+*.db
+*.db-journal
+uvicorn_out.log
+uvicorn_err.log
+engine_out.log
+engine_err.log
+
+# Node
+node_modules/
+dist/
+build/
+.vite/
+*.tsbuildinfo
+
+# Mobile
+mobile/.expo/
+mobile/node_modules/
+
+# IDE / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+npm-debug.log*
+
+# Docker
+docker-compose.override.yml
+
+# Secrets / certs
+*.pem
+*.key
+!nginx/certs/.gitkeep

@@ -1,0 +1,80 @@
+from tests.conftest import auth_headers, login
+
+
+def test_create_camera_excludes_credentials_from_response(client, admin_user):
+    token = login(client, admin_user.email)
+    resp = client.post(
+        "/api/cameras",
+        json={
+            "name": "Front Gate",
+            "source_type": "RTSP",
+            "stream_url": "rtsp://192.168.1.50:554/stream",
+            "username": "admin",
+            "password": "supersecret",
+        },
+        headers=auth_headers(token),
+    )
+    assert resp.status_code == 201
+    body = resp.json()
+    assert "password" not in body
+    assert "stream_url" not in body
+    assert "username" not in body
+
+
+def test_camera_password_is_encrypted_at_rest(client, db_session, admin_user):
+    import uuid
+
+    from app.models.camera import Camera
+
+    token = login(client, admin_user.email)
+    created = client.post(
+        "/api/cameras",
+        json={"name": "Front Gate", "source_type": "RTSP", "stream_url": "rtsp://host/x", "password": "supersecret"},
+        headers=auth_headers(token),
+    ).json()
+
+    camera = db_session.get(Camera, uuid.UUID(created["id"]))
+    assert camera.password_encrypted != "supersecret"
+    assert camera.password_encrypted != ""
+
+
+def test_camera_code_auto_increments(client, admin_user):
+    token = login(client, admin_user.email)
+    first = client.post("/api/cameras", json={"name": "Cam A", "source_type": "SIMULATED"}, headers=auth_headers(token)).json()
+    second = client.post("/api/cameras", json={"name": "Cam B", "source_type": "SIMULATED"}, headers=auth_headers(token)).json()
+    assert first["camera_code"] == "CAM-001"
+    assert second["camera_code"] == "CAM-002"
+
+
+def test_update_camera_partial_fields(client, admin_user):
+    token = login(client, admin_user.email)
+    cam = client.post("/api/cameras", json={"name": "Cam A", "source_type": "SIMULATED"}, headers=auth_headers(token)).json()
+
+    resp = client.patch(f"/api/cameras/{cam['id']}", json={"ai_fps": 10}, headers=auth_headers(token))
+    assert resp.status_code == 200
+    assert resp.json()["ai_fps"] == 10
+    assert resp.json()["name"] == "Cam A"
+
+
+def test_delete_camera(client, admin_user):
+    token = login(client, admin_user.email)
+    cam = client.post("/api/cameras", json={"name": "Cam A", "source_type": "SIMULATED"}, headers=auth_headers(token)).json()
+
+    resp = client.delete(f"/api/cameras/{cam['id']}", headers=auth_headers(token))
+    assert resp.status_code == 204
+
+    resp = client.get(f"/api/cameras/{cam['id']}", headers=auth_headers(token))
+    assert resp.status_code == 404
+
+
+def test_video_file_test_connection_reports_missing_file(client, admin_user):
+    token = login(client, admin_user.email)
+    cam = client.post(
+        "/api/cameras",
+        json={"name": "Cam A", "source_type": "VIDEO_FILE", "video_file_path": "/nonexistent/video.mp4"},
+        headers=auth_headers(token),
+    ).json()
+
+    resp = client.post(f"/api/cameras/{cam['id']}/test-connection", headers=auth_headers(token))
+    assert resp.status_code == 200
+    assert resp.json()["success"] is False
