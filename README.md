@@ -270,8 +270,20 @@ cp .env.example .env   # EXPO_PUBLIC_API_URL — defaults to 10.0.2.2:8000 (Andr
 npx expo start --android   # requires an Android emulator; --ios needs a Mac
 ```
 
-For a physical device on the same lab network, set `EXPO_PUBLIC_API_URL` to the
-Ubuntu Server's LAN IP (e.g. `http://192.168.1.100`, through nginx) instead.
+`--android`/`--ios` need a local emulator/simulator, which a headless Ubuntu Server
+doesn't have — on a server deployment, run `npx expo start` and connect the **Expo Go**
+app on a physical phone instead (scan the QR code, or connect manually to the printed
+URL). The phone must be able to route to the server's LAN IP — a VM behind NAT (e.g.
+VMware's default NAT network) needs bridged networking first, or port-forwarding, since
+NAT alone won't let another device on the LAN reach it.
+
+Point a physical device at the backend **directly over plain HTTP** (`http://<server-lan-ip>:8000`),
+not through nginx's HTTPS. Expo Go is a published app using a plain `fetch()` with no
+"proceed anyway" flow for self-signed certificates the way a desktop browser has, so
+nginx's self-signed cert will just fail outright for it. `docker-compose.yml` publishes
+port 8000 for exactly this reason — it's a dev/lab-only exception to "backend isn't
+published to the host" (section 57), since there is no way to serve HTTPS with a
+CA-trusted cert without a real domain (see `scripts/setup-letsencrypt.sh`).
 
 ## 7. Security hardening (production, beyond the lab default)
 

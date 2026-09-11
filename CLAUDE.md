@@ -193,6 +193,14 @@ ai-engine), `AI_DEVICE` (cpu — GPU is an optional future path, never required)
    production/100+-camera deployment (section 77) should move this to an async
    server (e.g. `aiohttp`) or a proper media server (e.g. MediaMTX/go2rtc) rather than
    scaling thread count.
+11. **Backend port 8000 is published to the host** in `docker-compose.yml` (a
+   deliberate exception to "not published to the host" — every other internal service
+   stays unpublished). This exists only so the mobile app can reach the backend over
+   plain HTTP: Expo Go is a published app using a bare `fetch()` with no
+   click-through-the-warning flow for nginx's self-signed HTTPS cert, so mobile can't
+   use the same TLS path the web dashboard does. This is a real, unresolved gap, not a
+   workaround to remove later — it stays until a CA-trusted cert (`scripts/setup-letsencrypt.sh`,
+   needs a real domain) is in place, at which point port 8000 should be closed again.
 
 ## Current implementation status
 

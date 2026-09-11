@@ -34,6 +34,12 @@ services:
     environment:
       DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-ezsolutions}:${POSTGRES_PASSWORD:-change_me_strong_password}@postgres:5432/${POSTGRES_DB:-ez_camera_analytics}
       REDIS_URL: redis://redis:6379/0
+    ports:
+      # Dev/lab-only: gives the Expo Go mobile app a plain-HTTP path directly to the
+      # backend, since it can't click through nginx's self-signed HTTPS cert the way a
+      # desktop browser can. Comment this out (or firewall port 8000) for anything
+      # beyond a lab deployment — it bypasses TLS entirely.
+      - "8000:8000"
     volumes:
       - ./data/recordings:/data/recordings
       - ./data/snapshots:/data/snapshots
