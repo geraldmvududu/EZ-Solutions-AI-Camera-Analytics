@@ -98,10 +98,10 @@ def test_security_report_pdf_includes_face_section_for_permitted_user(client, db
     captured = {}
     real_builder = reports_module.build_security_report_pdf
 
-    def spy(summary, tenant_name, face_recognition_by_status=None, top_recognized_people=None):
+    def spy(summary, tenant_name, face_recognition_by_status=None, top_recognized_people=None, video_intelligence_incidents=None):
         captured["face_recognition_by_status"] = face_recognition_by_status
         captured["top_recognized_people"] = top_recognized_people
-        return real_builder(summary, tenant_name, face_recognition_by_status, top_recognized_people)
+        return real_builder(summary, tenant_name, face_recognition_by_status, top_recognized_people, video_intelligence_incidents)
 
     monkeypatch.setattr(reports_module, "build_security_report_pdf", spy)
 
@@ -120,10 +120,10 @@ def test_security_report_pdf_omits_face_section_without_permission(client, viewe
     captured = {}
     real_builder = reports_module.build_security_report_pdf
 
-    def spy(summary, tenant_name, face_recognition_by_status=None, top_recognized_people=None):
+    def spy(summary, tenant_name, face_recognition_by_status=None, top_recognized_people=None, video_intelligence_incidents=None):
         captured["face_recognition_by_status"] = face_recognition_by_status
         captured["top_recognized_people"] = top_recognized_people
-        return real_builder(summary, tenant_name, face_recognition_by_status, top_recognized_people)
+        return real_builder(summary, tenant_name, face_recognition_by_status, top_recognized_people, video_intelligence_incidents)
 
     monkeypatch.setattr(reports_module, "build_security_report_pdf", spy)
 

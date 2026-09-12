@@ -14,6 +14,11 @@ class ZoneType(str, enum.Enum):
     LOITERING = "LOITERING"
     FACE_DETECTION = "FACE_DETECTION"
     FACE_EXCLUSION = "FACE_EXCLUSION"
+    # AI Video Intelligence Phase 1 (section 5): functionally identical to LOITERING
+    # (same dwell-time mechanism, ai-engine/app/core/zones.py::LoiteringTracker is
+    # already zone-type-agnostic) but reported/dashboarded as its own category —
+    # RESTRICTED_AREA_VIOLATION events, not LOITERING_DETECTED ones.
+    RESTRICTED_AREA = "RESTRICTED_AREA"
 
 
 class Zone(Base, UUIDPKMixin, TimestampMixin, TenantScopedMixin):

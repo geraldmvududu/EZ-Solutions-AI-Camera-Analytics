@@ -205,6 +205,37 @@ that happens mid-recording carries a real link to it.
 If a recording has since been deleted by retention, the "View in recording" action
 fails quietly rather than erroring — there is simply no evidence left to show.
 
+### Detect gate jumping, tailgating, and restricted-area entry
+
+AI Video Intelligence Phase 1 extends the existing tripwire/zone pipeline — no new
+detector model, just real trajectory/timing analysis on top of what's already there.
+
+1. On **Zones & Tripwires**, draw a tripwire across a gate and check **Gate jump /
+   climbing detection** to flag crossings whose recent trajectory looks like a climb
+   or jump rather than a normal walk-through (a real, transparent heuristic — see
+   `CLAUDE.md` limitation 16 for exactly what it does and doesn't catch). Check
+   **Tailgating detection** (with a window in seconds) to flag a second, different
+   person crossing the same tripwire shortly after the first.
+2. Draw a **Restricted Area** zone (same dwell-time mechanism as **Loitering**, just
+   reported as its own category) for areas like a server room or cash office.
+3. Any of these firing automatically opens a real **Incident** — no person needs to be
+   recognized first, unlike the identified-person violation flow above; it shows
+   "Unknown Person" when nothing else identifies them. Open it to see a real, computed
+   **risk score** (0-100, transparent formula, alert-prioritization only — never proof
+   of wrongdoing), a confidence value where the detector produced one, and a
+   deterministic (not AI-generated-prose) summary explicitly telling you to review the
+   evidence.
+4. Once the underlying recording finishes, a real **evidence clip** (ffmpeg-trimmed
+   pre/post-event footage, seconds configurable on **AI Video Intelligence Settings**)
+   appears on the incident as **View evidence clip**.
+5. **AI Video Intelligence** in the sidebar shows today's incident counts by severity
+   and category, backed by a real endpoint — not a static mock.
+
+After-hours detection needs no new UI at all: add a rule on the **Rules** page for any
+existing event type (including the new ones above) with a `time_start`/`time_end`
+window covering off-hours, or `days_of_week` — the existing rule engine already
+supports this.
+
 ### 1.11 Logs
 
 ```bash
@@ -315,9 +346,12 @@ python -m app.main
 ## 4. Testing
 
 ```bash
-cd backend && .venv/bin/pytest -q   # 100 tests, including Facial Recognition, the
-                                     # violation-incident correlation, and recording linkage
-cd ai-engine && .venv/bin/pytest -q # 48 tests, including FaceRecognizer and SegmentRecorder
+cd backend && .venv/bin/pytest -q   # 133 tests, including Facial Recognition, the
+                                     # violation-incident correlation, recording linkage,
+                                     # and AI Video Intelligence (gate-jumping/tailgating/
+                                     # restricted-area, risk scoring, evidence clips)
+cd ai-engine && .venv/bin/pytest -q # 60 tests, including FaceRecognizer, SegmentRecorder,
+                                     # and the gate-jump/tailgating heuristics
 cd worker && .venv/bin/pytest -q    # 6 tests, retention cleanup incl. face data
 cd frontend && npm run build      # type-checks + production build
 cd mobile && npx tsc --noEmit     # type-checks

@@ -23,6 +23,7 @@ from app.core.face_recognizer import FaceRecognizer
 from app.core.recorder import SegmentRecorder
 from app.core.snapshotter import save_snapshot
 from app.core.tracker import CentroidTracker
+from app.core.tripwire_analysis import TailgatingTracker, gate_jump_confidence
 from app.core.zones import LoiteringTracker, crossed_line, point_in_polygon
 from app.detectors import build_detector
 from app.detectors.base import Detection
@@ -56,6 +57,7 @@ class CameraWorker:
         self._detector = build_detector() if camera["ai_enabled"] else None
         self._tracker = CentroidTracker()
         self._loitering = LoiteringTracker()
+        self._tailgating = TailgatingTracker()
         self._recorder = SegmentRecorder(self.camera_id)
         self._reported_track_ids: set[int] = set()
         self._last_tracked: dict[int, Detection] = {}
@@ -259,6 +261,51 @@ class CameraWorker:
                 }
             )
 
+            # AI Video Intelligence Phase 1 (section 4): opt-in per tripwire (a line
+            # actually drawn across a gate/fence, not a general counting line) AND the
+            # tenant-wide kill switch — see tripwire_analysis.py for exactly what this
+            # heuristic does and doesn't verify.
+            if tripwire.get("gate_jump_detection_enabled") and self.camera.get("gate_jumping_enabled", True):
+                confidence = gate_jump_confidence(self._tracker.history_for(track_id))
+                if confidence is not None:
+                    backend_client.create_event(
+                        {
+                            "camera_id": self.camera_id,
+                            "event_type": "GATE_JUMPING_DETECTED",
+                            "severity": "HIGH",
+                            "detection_id": detection_id,
+                            "tripwire_id": tripwire["id"],
+                            "snapshot_id": snapshot_id,
+                            "recording_id": self._recorder.recording_id,
+                            "occurred_at": datetime.now(timezone.utc).isoformat(),
+                            "event_metadata": {
+                                "direction": direction, "tracking_id": track_id, "confidence": confidence,
+                                **self._identity_metadata(track_id),
+                            },
+                        }
+                    )
+
+            if tripwire.get("tailgating_detection_enabled") and self.camera.get("tailgating_enabled", True):
+                window = tripwire.get("tailgating_window_seconds", 5)
+                tailgated_track_id = self._tailgating.observe(tripwire["id"], track_id, time.time(), window)
+                if tailgated_track_id is not None:
+                    backend_client.create_event(
+                        {
+                            "camera_id": self.camera_id,
+                            "event_type": "TAILGATING_DETECTED",
+                            "severity": "MEDIUM",
+                            "detection_id": detection_id,
+                            "tripwire_id": tripwire["id"],
+                            "snapshot_id": snapshot_id,
+                            "recording_id": self._recorder.recording_id,
+                            "occurred_at": datetime.now(timezone.utc).isoformat(),
+                            "event_metadata": {
+                                "tracking_id": track_id, "leading_tracking_id": tailgated_track_id,
+                                "window_seconds": window, **self._identity_metadata(track_id),
+                            },
+                        }
+                    )
+
     def _check_zones(self, track_id: int, centroid, frame, detection_id) -> None:
         for zone in self.zones:
             if not zone.get("is_enabled", True):
@@ -295,6 +342,28 @@ class CameraWorker:
                             "snapshot_id": snapshot_id,
                             "occurred_at": datetime.now(timezone.utc).isoformat(),
                             "event_metadata": {"tracking_id": track_id, "threshold_seconds": threshold},
+                        }
+                    )
+
+            # AI Video Intelligence Phase 1 (section 5): same configurable-dwell
+            # mechanism as LOITERING above (LoiteringTracker is zone-type-agnostic,
+            # keyed by track_id+zone_id) — reported as its own category rather than a
+            # generic LOITERING_DETECTED so it's dashboarded/reported separately.
+            if zone["zone_type"] == "RESTRICTED_AREA" and self.camera.get("restricted_area_enabled", True):
+                threshold = zone.get("loitering_threshold_seconds", settings.default_loitering_seconds)
+                if self._loitering.observe(track_id, zone["id"], inside, threshold):
+                    snapshot_id = self._save_and_report_snapshot(frame, None)
+                    backend_client.create_event(
+                        {
+                            "camera_id": self.camera_id,
+                            "event_type": "RESTRICTED_AREA_VIOLATION",
+                            "severity": "HIGH",
+                            "detection_id": detection_id,
+                            "zone_id": zone["id"],
+                            "snapshot_id": snapshot_id,
+                            "recording_id": self._recorder.recording_id,
+                            "occurred_at": datetime.now(timezone.utc).isoformat(),
+                            "event_metadata": {"tracking_id": track_id, "threshold_seconds": threshold, **self._identity_metadata(track_id)},
                         }
                     )
 

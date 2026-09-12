@@ -49,6 +49,12 @@ logger = logging.getLogger("ai-engine.recorder")
 settings = get_settings()
 
 
+def _parse_iso(value: str) -> datetime:
+    # Backend-returned timestamps may use a trailing "Z" — datetime.fromisoformat only
+    # accepts that on Python 3.11+, so normalize to an explicit offset defensively.
+    return datetime.fromisoformat(value.replace("Z", "+00:00"))
+
+
 class SegmentRecorder:
     def __init__(self, camera_id: str, tenant_dir: str | None = None) -> None:
         self._camera_id = camera_id
@@ -147,9 +153,63 @@ class SegmentRecorder:
                     "file_size_bytes": file_size,
                 },
             )
+            self._generate_evidence_clips(self.recording_id, self._file_path)
 
         self._writer = None
         self._file_path = None
         self._started_at = None
         self._frame_count = 0
         self.recording_id = None
+
+    def _generate_evidence_clips(self, recording_id: str, file_path: str | None) -> None:
+        """AI Video Intelligence Phase 1 (section 21): a real, post-hoc ffmpeg trim of
+        THIS now-finalized segment for any Incident that was linked to it while it was
+        still being recorded. Never raises — a trim failure just leaves an Incident
+        without an evidence_clip_path, not a lost recording. Honest caveat: available
+        pre-roll is capped by how early this segment itself started, since there is no
+        live ring buffer independent of recording segments (see this module's own
+        pre-roll limitation documented above)."""
+        if not file_path or not os.path.exists(file_path):
+            return
+        try:
+            pending = backend_client.get_pending_evidence_clips(recording_id)
+        except Exception:
+            logger.exception("Camera %s: failed to fetch pending evidence clips for recording %s", self._camera_id, recording_id)
+            return
+
+        for clip in pending:
+            try:
+                self._trim_one_evidence_clip(file_path, clip)
+            except Exception:
+                logger.exception("Camera %s: failed to generate evidence clip for incident %s", self._camera_id, clip.get("incident_id"))
+
+    def _trim_one_evidence_clip(self, file_path: str, clip: dict) -> None:
+        event_occurred_at = _parse_iso(clip["event_occurred_at"])
+        recording_started_at = _parse_iso(clip["recording_started_at"])
+        recording_duration = clip["recording_duration_seconds"]
+        pre_seconds = clip["pre_event_seconds"]
+        post_seconds = clip["post_event_seconds"]
+
+        event_offset = (event_occurred_at - recording_started_at).total_seconds()
+        start_offset = max(0.0, event_offset - pre_seconds)
+        end_offset = event_offset + post_seconds
+        if recording_duration:
+            end_offset = min(recording_duration, end_offset)
+        clip_duration = max(0.5, end_offset - start_offset)
+
+        clip_path = f"{file_path}.incident-{clip['incident_id']}.mp4"
+        result = subprocess.run(
+            ["ffmpeg", "-y", "-ss", str(start_offset), "-i", file_path, "-t", str(clip_duration), "-c", "copy", clip_path],
+            capture_output=True, timeout=60,
+        )
+        if result.returncode != 0 or not os.path.exists(clip_path):
+            stderr_tail = result.stderr.decode(errors="replace")[-500:] if result.stderr else ""
+            logger.warning(
+                "Camera %s: evidence clip trim failed for incident %s (rc=%s): %s",
+                self._camera_id, clip["incident_id"], result.returncode, stderr_tail,
+            )
+            if os.path.exists(clip_path):
+                os.remove(clip_path)
+            return
+
+        backend_client.set_incident_evidence_clip(clip["incident_id"], {"evidence_clip_path": clip_path})

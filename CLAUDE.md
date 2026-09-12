@@ -198,6 +198,62 @@ analytics aggregate here, not a Python loop over loaded rows) -- gated behind th
 `view_biometric_events` permission the CSV export already requires, so a user without
 it gets a complete report minus that one section rather than a 403 on the whole PDF.
 
+**AI Video Intelligence, Phase 1** (`app/services/violation_service.py`,
+`ai-engine/app/core/tripwire_analysis.py`): extends the existing tripwire/zone
+pipeline rather than adding a parallel detection system — nearly everything the
+original spec asked for already existed under other names (tripwire crossing +
+direction, `INTRUSION`/`LOITERING` zones, the generic rule engine's
+`time_start`/`time_end`/`days_of_week` conditions already cover "after-hours" rules
+with zero new code). What Phase 1 actually adds:
+- `ZoneType.RESTRICTED_AREA` — identical mechanism to `LOITERING`
+  (`ai-engine/app/core/zones.py::LoiteringTracker` is already zone-type-agnostic,
+  keyed by `track_id`+`zone_id`), reported as its own category.
+- `Tripwire.tailgating_detection_enabled`/`tailgating_window_seconds` — a second,
+  different track crossing the same tripwire within the window is flagged
+  `TAILGATING_DETECTED`. No access-control-system integration exists in this
+  platform, so "authorized" here just means "the first crossing observed in the
+  window" — real door/gate/turnstile correlation would be a stronger signal.
+- `Tripwire.gate_jump_detection_enabled` — `tripwire_analysis.py::gate_jump_confidence`
+  is a real, transparent, honestly-approximate heuristic (peak vertical centroid
+  displacement clearly dominating the track's own recent horizontal pace), not a
+  trained climbing/jumping classifier. Tuned against synthetic trajectories only —
+  validate against real footage once deployed.
+- `app/services/violation_service.py` gained a second incident-creation path: unlike
+  the original identified-person-only path (a plain unidentified crossing isn't
+  incident-worthy), `GATE_JUMPING_DETECTED`/`TAILGATING_DETECTED`/
+  `RESTRICTED_AREA_VIOLATION` only ever fire when a violation was already decided, so
+  they *always* become an Incident — "Unknown Person" when no face match, rather than
+  gating on identity. Each gets `compute_risk_score()` (0-100, a documented severity +
+  after-hours + identified-person weight table — alert-prioritization only, never
+  proof of wrongdoing) and a deterministic, template-based AI summary from real event/
+  zone/camera/confidence facts (per the "do not hallucinate" requirement, this is
+  plain string formatting, not an LLM call) with `requires_human_review=True`.
+- Real evidence clips: `Incident.source_event_id` (set at creation, independent of
+  whether any `AIRule` matched and created an `Alert`) lets
+  `GET /api/incidents/internal/pending-evidence-clips?recording_id=` find incidents
+  needing a clip once their recording finalizes; `ai-engine/app/core/recorder.py
+  ::SegmentRecorder.stop()` then runs a real stream-copy ffmpeg trim (honest caveat:
+  available pre-roll is capped by how early the segment itself started — no live ring
+  buffer, see limitation 4) and reports the path back via
+  `PATCH /api/incidents/{id}/internal/evidence-clip`. Playback
+  (`GET /api/incidents/{id}/evidence-clip?token=`) mirrors the recordings `/play`
+  endpoint's query-token pattern exactly.
+- New `VideoIntelligenceSettings` tenant table (mirrors `FaceRecognitionSettings`):
+  per-tripwire/zone opt-in is the primary control; these three toggles are an
+  additional tenant-wide kill switch flattened onto `GET /cameras/internal/active`
+  the same way `liveness_detection_enabled` already is.
+- A new `AI Video Intelligence` dashboard (real incident counts by severity/category,
+  `GET /api/incidents/summary`) and settings page, both flat sidebar items (matching
+  the existing convention — see limitation 14, not the nested tree the original spec
+  sketched), plus a PDF report section (`get_incident_type_report_data`, same GROUP BY
+  convention as everything else in `analytics_service.py`).
+
+Explicitly not built in Phase 1 (see limitations 17-19): theft/unauthorized-object-
+removal and abandoned-object detection (need a multi-class detector — the current one
+is real but PERSON-only), person-falling/safety detection (needs pose estimation),
+and PPE/fighting/crowd-panic detection (need specialized models this environment
+can't obtain).
+
 ## Development commands
 
 ```bash
@@ -220,7 +276,7 @@ cd ai-engine && python -m app.main
 ## Testing commands
 
 ```bash
-cd backend && pytest -q      # 106 tests: auth, RBAC, tenant isolation, camera CRUD
+cd backend && pytest -q      # 133 tests: auth, RBAC, tenant isolation, camera CRUD
                               # (including the delete cascade covering every dependent
                               # table), credential encryption, rule engine, analytics
                               # aggregates, report export, the Redis-backed rate limiter
@@ -234,12 +290,20 @@ cd backend && pytest -q      # 106 tests: auth, RBAC, tenant isolation, camera C
                               # recording_id propagating Event -> Alert -> Incident,
                               # multi-frame confirmation's pending/confirm logic, the
                               # face-appearances CSV export, recognition_cooldown_seconds
-                              # flattening onto GET /cameras/internal/active, and the PDF
+                              # flattening onto GET /cameras/internal/active, the PDF
                               # security report's Face Recognition section (both its real
-                              # GROUP BY aggregate and the view_biometric_events gate) —
-                              # all against a real in-memory SQLite DB through the actual
-                              # FastAPI app
-cd ai-engine && pytest -q    # 49 tests: centroid tracker, zone/tripwire geometry,
+                              # GROUP BY aggregate and the view_biometric_events gate),
+                              # AI Video Intelligence Phase 1 (RESTRICTED_AREA zone/
+                              # tailgating/gate-jump tripwire fields round-tripping
+                              # through the real API, the always-incident path for the
+                              # three new event types with/without a recognized person,
+                              # compute_risk_score, VideoIntelligenceSettings CRUD +
+                              # tenant isolation, the two internal evidence-clip
+                              # endpoints and the query-token playback endpoint using
+                              # real temp files, and the PDF report's incident-type
+                              # section) — all against a real in-memory SQLite DB
+                              # through the actual FastAPI app
+cd ai-engine && pytest -q    # 60 tests: centroid tracker, zone/tripwire geometry,
                               # loitering timer, motion detection (real MOG2 background
                               # subtraction against synthetic frames), privacy-zone
                               # blurring, the discovery-loop config fingerprint, the
@@ -248,12 +312,15 @@ cd ai-engine && pytest -q    # 49 tests: centroid tracker, zone/tripwire geometr
                               # static env var, zone filtering, identity tracking/expiry
                               # for the violation correlation, liveness frame-diff
                               # rejection, exception-safety — a recognition bug must never
-                              # stop the capture loop), and SegmentRecorder
+                              # stop the capture loop), SegmentRecorder
                               # (create-at-start/finalize-at-stop, the ffmpeg H.264
-                              # transcode step and its fallback paths —
-                              # subprocess mocked in this unit test; the real ffmpeg
-                              # binary itself is confirmed working end-to-end on the
-                              # deployed Ubuntu VM, see "Verified end-to-end")
+                              # transcode step and its fallback paths, and the evidence-
+                              # clip trim step's offset/duration/clamping logic and
+                              # graceful-failure path — subprocess mocked in these unit
+                              # tests; the real ffmpeg binary itself is confirmed working
+                              # end-to-end on the deployed Ubuntu VM, see "Verified
+                              # end-to-end"), and the gate-jump heuristic/tailgating
+                              # window logic (synthetic trajectories)
 cd worker && pytest -q       # 6 tests: retention cleanup for recordings/snapshots/
                               # face-recognition-events/face-profiles against a real
                               # SQLite DB with a hand-crafted minimal schema — the
@@ -434,6 +501,35 @@ limitation 13), `FACE_PATH` (`/data/faces`, enrolled-photo storage).
    preventing this inconsistent combination from being saved. Keep
    `recognition_cooldown_seconds` under 120s wherever `multi_frame_confirmation_enabled`
    is on for a tenant.
+16. **AI Video Intelligence Phase 1's gate-jump heuristic is real but approximate**:
+   `tripwire_analysis.py::gate_jump_confidence` looks only at a track's own recent
+   centroid trajectory (no trained climbing/jumping model exists in this environment)
+   — it will not catch every real climb/jump, and an unusually erratic but ordinary
+   walk-through (e.g. someone stumbling) could in principle trigger a false positive.
+   Tuned against synthetic test trajectories only (`ai-engine/tests/
+   test_tripwire_analysis.py`) — validate the `GATE_JUMP_MIN_VERTICAL_STEP`/
+   `GATE_JUMP_VELOCITY_RATIO` constants against real footage once deployed, and treat
+   every `GATE_JUMPING_DETECTED` incident as `requires_human_review` (already the
+   default).
+17. **Theft/unauthorized-object-removal and abandoned-object detection are not
+   implemented** (AI Video Intelligence Phase 2 backlog): both need tracking actual
+   objects (boxes, bags), and the current detector
+   (`ai-engine/app/detectors/hog_detector.py`) is real but PERSON-only — see
+   limitation 3. Adding a real multi-class detector (e.g. YOLOv8n) to unlock this is
+   scoped as a future phase, not faked with a person-only proxy.
+18. **Person-falling/lying-down/motionless safety detection is not implemented** (AI
+   Video Intelligence Phase 3 backlog): needs real pose estimation, which this
+   platform doesn't have. A bounding-box-only heuristic was deliberately not built
+   as a substitute — it would be too unreliable to responsibly label a "safety alert."
+19. **PPE detection, fighting/aggressive-activity detection, and crowd-panic
+   indicators are out of scope** (same treatment as the existing ANPR limitation):
+   these need specialized trained models (PPE classifiers, action-recognition
+   networks) this offline-build environment can't obtain. Not faked with a heuristic
+   proxy. Also out of scope: real access-control-system correlation for tailgating/
+   forced-entry (no such integration exists in this platform — tailgating detection
+   is video-only), and true scheduled/emailed daily/weekly AI security reports (no
+   email channel exists anywhere in this codebase — only WebSocket dashboard + Expo
+   push do; the PDF/CSV reports are on-demand, not autonomously emailed).
 
 ## Current implementation status
 
@@ -449,6 +545,7 @@ limitation 13), `FACE_PATH` (`/data/faces`, enrolled-photo storage).
 | 8. Multi-tenancy | Data model + isolation enforced and tested; no tenant self-signup UI |
 | 9. Production hardening (real TLS, Redis rate limit, perf) | Redis-backed rate limiting done; real-TLS automation done (`scripts/setup-letsencrypt.sh`, needs the user's own domain to run) |
 | 10. Facial Recognition & Identity Analytics | Phase 1 + Phase 2 done, tested, verified in a real browser — enroll/manage people, real detect→embed→match pipeline, recognition events feeding the existing event/alert/rule/notification/WebSocket pipeline, camera + zone config, human review, identified-person violation → auto-Incident, recordings linked to face/violation events with in-browser seekable playback, multi-frame confirmation, liveness (narrow scope, limitation 12), retention enforcement, and a CSV appearance-history export. Full drag-and-drop rules-builder UI is still out of scope (rules are managed via the existing generic Rules page) |
+| 11. AI Video Intelligence | Phase 1 done, tested, verified in a real browser — gate-jumping/climbing (heuristic), tailgating, and restricted-area detection extending the existing tripwire/zone pipeline; a real, transparent risk score; auto-created Incidents with a template-based (not LLM) AI summary; real ffmpeg-trimmed evidence clips; a dashboard and settings page; a PDF report section. Theft/abandoned-object detection (Phase 2, needs a multi-class detector) and fall detection (Phase 3, needs pose estimation) are deliberately not built yet — see limitations 17-19 |
 
 ## Verified end-to-end (not just "should work")
 
@@ -617,3 +714,30 @@ limitation 13), `FACE_PATH` (`/data/faces`, enrolled-photo storage).
   breaks non-interactive/`BatchMode` SSH at the signing step with no clear server-side
   error — generated a dedicated passphrase-free key for this automation instead of
   ever handling the existing key's passphrase or the account password directly.)
+- **AI Video Intelligence Phase 1, end-to-end in a real browser against a real
+  (unmocked) backend.** Created a real camera and tripwire with
+  `gate_jump_detection_enabled`/`tailgating_detection_enabled` through the actual
+  Zones & Tripwires UI/API and confirmed the new "Restricted Area (AI Video
+  Intelligence)" zone-type option and the tripwire's "· gate-jump · tailgating"
+  badges render correctly. Posted a real `GATE_JUMPING_DETECTED` event (internal
+  token, as ai-engine would) and confirmed a real Incident was auto-created with the
+  exact expected values: title `"Possible Gate Jumping — Unknown Person at Main
+  Gate"`, `risk_score: 30` (matching `compute_risk_score`'s documented formula by
+  hand: 30 for HIGH severity + 0 for occurring within business hours + 0 for no
+  identified person), `confidence: 0.87` (echoing the value sent), `requires_human_
+  review: true`, and the exact deterministic template description including the
+  "not a trained climbing/jumping classifier" caveat. Simulated the evidence-clip
+  pipeline ai-engine's `SegmentRecorder.stop()` performs: called the real
+  `pending-evidence-clips` endpoint (found the incident via `source_event_id`, with
+  correct offsets), `PATCH`ed a real clip path, then confirmed
+  `GET /api/incidents/{id}/evidence-clip?token=` returns `200`, `content-type:
+  video/mp4`, `accept-ranges: bytes`, and the exact real file bytes (verified with
+  `curl` directly, after first catching a test-setup artifact: a bash-style `/tmp`
+  path doesn't resolve to the same location as the Windows Python process expects —
+  not a code bug). Confirmed the new **AI Video Intelligence** dashboard's real
+  `GET /api/incidents/summary`-backed counts matched exactly (1 HIGH, 1
+  `GATE_JUMPING_DETECTED`), and that the **AI Video Intelligence Settings** page's
+  save/reload round-trip genuinely persists (`pre_event_seconds`, and unchecking
+  `tailgating_enabled`, both confirmed via direct DOM inspection after a fresh page
+  load). `cd backend && pytest -q` (133) and `cd ai-engine && pytest -q` (60) both
+  green, `cd frontend && npm run build` clean throughout.

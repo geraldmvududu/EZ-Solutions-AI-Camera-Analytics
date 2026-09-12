@@ -19,6 +19,8 @@ import { FaceDashboardPage } from "./pages/faces/FaceDashboard";
 import { EnrollPersonPage } from "./pages/faces/EnrollPerson";
 import { EnrolledPeoplePage } from "./pages/faces/EnrolledPeople";
 import { RecognitionEventsPage } from "./pages/faces/RecognitionEvents";
+import { VideoIntelligenceDashboardPage } from "./pages/VideoIntelligenceDashboard";
+import { VideoIntelligenceSettingsPage } from "./pages/VideoIntelligenceSettings";
 
 export default function App() {
   return (
@@ -55,6 +57,15 @@ export default function App() {
           }
         />
         <Route path="/incidents" element={<ProtectedRoute><IncidentsPage /></ProtectedRoute>} />
+        <Route path="/video-intelligence" element={<ProtectedRoute><VideoIntelligenceDashboardPage /></ProtectedRoute>} />
+        <Route
+          path="/video-intelligence/settings"
+          element={
+            <ProtectedRoute permission="manage_rules">
+              <VideoIntelligenceSettingsPage />
+            </ProtectedRoute>
+          }
+        />
         <Route
           path="/faces"
           element={

@@ -11,6 +11,10 @@ class TripwireCreate(BaseModel):
     line: list[list[float]]
     direction: TripwireDirection = TripwireDirection.BOTH
     is_enabled: bool = True
+    # AI Video Intelligence Phase 1 (sections 4/8) — opt-in per tripwire, not global.
+    gate_jump_detection_enabled: bool = False
+    tailgating_detection_enabled: bool = False
+    tailgating_window_seconds: int = 5
 
 
 class TripwireUpdate(BaseModel):
@@ -18,6 +22,9 @@ class TripwireUpdate(BaseModel):
     line: list[list[float]] | None = None
     direction: TripwireDirection | None = None
     is_enabled: bool | None = None
+    gate_jump_detection_enabled: bool | None = None
+    tailgating_detection_enabled: bool | None = None
+    tailgating_window_seconds: int | None = None
 
 
 class TripwireResponse(BaseModel):
@@ -28,5 +35,8 @@ class TripwireResponse(BaseModel):
     line: list
     direction: TripwireDirection
     is_enabled: bool
+    gate_jump_detection_enabled: bool
+    tailgating_detection_enabled: bool
+    tailgating_window_seconds: int
 
     model_config = {"from_attributes": True}

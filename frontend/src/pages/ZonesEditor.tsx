@@ -16,6 +16,9 @@ export function ZonesEditorPage() {
   const [mode, setMode] = useState<DrawMode>("ZONE");
   const [zoneType, setZoneType] = useState<ZoneType>("INTRUSION");
   const [direction, setDirection] = useState<TripwireDirection>("BOTH");
+  const [gateJumpEnabled, setGateJumpEnabled] = useState(false);
+  const [tailgatingEnabled, setTailgatingEnabled] = useState(false);
+  const [tailgatingWindow, setTailgatingWindow] = useState(5);
   const [name, setName] = useState("");
   const [points, setPoints] = useState<[number, number][]>([]);
   const [error, setError] = useState<string | null>(null);
@@ -77,10 +80,18 @@ export function ZonesEditorPage() {
           setError("A tripwire needs exactly 2 points.");
           return;
         }
-        await zonesApi.createTripwire({ camera_id: cameraId, name, line: points, direction });
+        await zonesApi.createTripwire({
+          camera_id: cameraId, name, line: points, direction,
+          gate_jump_detection_enabled: gateJumpEnabled,
+          tailgating_detection_enabled: tailgatingEnabled,
+          tailgating_window_seconds: tailgatingWindow,
+        });
       }
       setName("");
       setPoints([]);
+      setGateJumpEnabled(false);
+      setTailgatingEnabled(false);
+      setTailgatingWindow(5);
       loadZonesAndTripwires(cameraId);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to save");
@@ -172,6 +183,7 @@ export function ZonesEditorPage() {
                   PRIVACY: "#94a3b8",
                   FACE_DETECTION: "#3b82f6",
                   FACE_EXCLUSION: "#64748b",
+                  RESTRICTED_AREA: "#a855f7",
                 };
                 const stroke = colors[z.zone_type] || "#ef4444";
                 return (
@@ -231,6 +243,7 @@ export function ZonesEditorPage() {
                   <option value="INTRUSION">Intrusion</option>
                   <option value="PRIVACY">Privacy (blurs this region)</option>
                   <option value="LOITERING">Loitering</option>
+                  <option value="RESTRICTED_AREA">Restricted Area (AI Video Intelligence)</option>
                   <option value="FACE_DETECTION">Face Detection Zone (recognize only here)</option>
                   <option value="FACE_EXCLUSION">Face Exclusion Zone (never recognize here)</option>
                 </select>
@@ -247,6 +260,28 @@ export function ZonesEditorPage() {
                   <option value="ENTERING">Entering only</option>
                   <option value="EXITING">Exiting only</option>
                 </select>
+
+                <div className="text-xs text-slate-400 mb-1 mt-3">AI Video Intelligence</div>
+                <label className="flex items-center gap-2 text-xs text-slate-300 mb-2">
+                  <input type="checkbox" checked={gateJumpEnabled} onChange={(e) => setGateJumpEnabled(e.target.checked)} />
+                  Gate jump / climbing detection
+                </label>
+                <label className="flex items-center gap-2 text-xs text-slate-300 mb-2">
+                  <input type="checkbox" checked={tailgatingEnabled} onChange={(e) => setTailgatingEnabled(e.target.checked)} />
+                  Tailgating detection
+                </label>
+                {tailgatingEnabled && (
+                  <div className="mb-3">
+                    <label className="block text-xs text-slate-400 mb-1">Tailgating window (seconds)</label>
+                    <input
+                      type="number"
+                      min={1}
+                      value={tailgatingWindow}
+                      onChange={(e) => setTailgatingWindow(Number(e.target.value))}
+                      className="w-full rounded bg-base-800 border border-base-600 px-2 py-1.5 text-sm text-slate-100"
+                    />
+                  </div>
+                )}
               </>
             )}
 
@@ -283,7 +318,11 @@ export function ZonesEditorPage() {
             {tripwires.length === 0 && <div className="text-xs text-slate-500">None yet.</div>}
             {tripwires.map((t) => (
               <div key={t.id} className="flex items-center justify-between text-xs py-1 border-b border-base-800 last:border-0">
-                <span className="text-slate-300">{t.name} <span className="text-slate-500">({t.direction})</span></span>
+                <span className="text-slate-300">
+                  {t.name} <span className="text-slate-500">({t.direction})</span>
+                  {t.gate_jump_detection_enabled && <span className="ml-1 text-accent-500">· gate-jump</span>}
+                  {t.tailgating_detection_enabled && <span className="ml-1 text-accent-500">· tailgating</span>}
+                </span>
                 <button onClick={() => handleDeleteTripwire(t.id)} className="text-severity-critical hover:underline">
                   Delete
                 </button>

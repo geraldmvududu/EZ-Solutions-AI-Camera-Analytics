@@ -11,6 +11,8 @@ const NAV_ITEMS = [
   { to: "/rules", label: "Rules", icon: "⚙", permission: "manage_rules" },
   { to: "/zones", label: "Zones & Tripwires", icon: "◈", permission: "manage_rules" },
   { to: "/incidents", label: "Incidents", icon: "⛨" },
+  { to: "/video-intelligence", label: "AI Video Intelligence", icon: "◆" },
+  { to: "/video-intelligence/settings", label: "AI Video Intelligence Settings", icon: "◆", permission: "manage_rules" },
   { to: "/faces", label: "Face Dashboard", icon: "◐", permission: "view_biometric_events" },
   { to: "/faces/enrolled", label: "Enrolled People", icon: "◐", permission: "view_biometric_events" },
   { to: "/faces/enroll", label: "Enroll Person", icon: "◐", permission: "manage_biometrics" },

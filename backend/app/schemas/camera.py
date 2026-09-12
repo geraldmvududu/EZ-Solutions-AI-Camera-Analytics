@@ -107,3 +107,12 @@ class CameraInternalResponse(CameraResponse):
 
     liveness_detection_enabled: bool = False
     recognition_cooldown_seconds: int = 30
+
+    # AI Video Intelligence Phase 1 (section 35) — tenant-level master switches from
+    # VideoIntelligenceSettings, flattened the same way. The per-tripwire/zone
+    # gate_jump_detection_enabled/tailgating_detection_enabled/RESTRICTED_AREA opt-in
+    # flags are the primary configuration surface; these three are an additional
+    # tenant-wide kill switch ai-engine checks alongside them.
+    gate_jumping_enabled: bool = True
+    tailgating_enabled: bool = True
+    restricted_area_enabled: bool = True

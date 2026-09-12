@@ -18,6 +18,7 @@ from app.models.system_health import SystemHealthCheck
 from app.models.tenant import Tenant
 from app.models.tripwire import Tripwire
 from app.models.user import Permission, Role, User
+from app.models.video_intelligence_settings import VideoIntelligenceSettings
 from app.models.zone import Zone
 
 __all__ = [
@@ -44,5 +45,6 @@ __all__ = [
     "Permission",
     "Role",
     "User",
+    "VideoIntelligenceSettings",
     "Zone",
 ]

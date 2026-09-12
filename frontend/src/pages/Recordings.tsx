@@ -2,19 +2,33 @@ import { useEffect, useState } from "react";
 import { Layout } from "../components/layout/Layout";
 import { getRecordingPlayUrl, listRecordings, type Recording } from "../api/misc";
 
-export function VideoPlayerModal({ recordingId, seekSeconds, onClose }: { recordingId: string; seekSeconds?: number; onClose: () => void }) {
+export function VideoPlayerModal({
+  recordingId,
+  seekSeconds,
+  onClose,
+  src,
+  title,
+}: {
+  recordingId: string;
+  seekSeconds?: number;
+  onClose: () => void;
+  // Overrides the computed recording playback URL — used to play an incident's
+  // evidence clip (a different endpoint) through this same modal/player.
+  src?: string;
+  title?: string;
+}) {
   return (
     <div className="fixed inset-0 bg-black/80 flex items-center justify-center z-50 p-4" onClick={onClose}>
       <div className="max-w-4xl w-full" onClick={(e) => e.stopPropagation()}>
         <div className="flex justify-between items-center mb-2">
-          <div className="text-slate-100 font-semibold">Recording playback</div>
+          <div className="text-slate-100 font-semibold">{title || "Recording playback"}</div>
           <button onClick={onClose} className="text-slate-400 hover:text-slate-100 text-sm">
             Close ✕
           </button>
         </div>
         <video
           key={recordingId}
-          src={getRecordingPlayUrl(recordingId)}
+          src={src ?? getRecordingPlayUrl(recordingId)}
           controls
           autoPlay
           className="w-full rounded-lg bg-black"

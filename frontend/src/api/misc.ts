@@ -61,10 +61,54 @@ export interface Incident {
   closed_at: string | null;
   created_at: string;
   related_alerts: IncidentAlert[];
+  incident_type: string;
+  confidence: number | null;
+  risk_score: number | null;
+  requires_human_review: boolean;
+  review_decision: string;
+  evidence_clip_path: string | null;
+  source_event_id: string | null;
 }
 
 export const listIncidents = () => apiRequest<Incident[]>("/api/incidents");
 export const createIncident = (payload: { title: string; description?: string; severity: string }) =>
   apiRequest<Incident>("/api/incidents", { method: "POST", body: payload });
-export const updateIncident = (id: string, payload: Partial<{ status: string; resolution: string }>) =>
+export const updateIncident = (id: string, payload: Partial<{ status: string; resolution: string; review_decision: string }>) =>
   apiRequest<Incident>(`/api/incidents/${id}`, { method: "PATCH", body: payload });
+
+export interface IncidentSummary {
+  range_start: string;
+  range_end: string;
+  by_severity: { label: string; count: number }[];
+  by_type: { label: string; count: number }[];
+}
+
+export const getIncidentSummary = (params: { start?: string; end?: string } = {}) => {
+  const qs = new URLSearchParams(params as Record<string, string>).toString();
+  return apiRequest<IncidentSummary>(`/api/incidents/summary${qs ? `?${qs}` : ""}`);
+};
+
+export interface VideoIntelligenceSettings {
+  id: string;
+  tenant_id: string;
+  gate_jumping_enabled: boolean;
+  tailgating_enabled: boolean;
+  restricted_area_enabled: boolean;
+  min_confidence: number;
+  pre_event_seconds: number;
+  post_event_seconds: number;
+  business_hours_start: string;
+  business_hours_end: string;
+}
+
+export const getVideoIntelligenceSettings = () => apiRequest<VideoIntelligenceSettings>("/api/video-intelligence-settings");
+export const updateVideoIntelligenceSettings = (payload: Partial<VideoIntelligenceSettings>) =>
+  apiRequest<VideoIntelligenceSettings>("/api/video-intelligence-settings", { method: "PUT", body: payload });
+
+// Same query-param-token pattern as getRecordingPlayUrl — a <video src="..."> can't
+// set an Authorization header. Scoped by incident ID (not a raw file path) so a user
+// can only ever fetch a clip belonging to an incident they're actually allowed to see.
+export function getEvidenceClipUrl(incidentId: string): string {
+  const token = tokenStore.getAccess() || "";
+  return `${API_URL}/api/incidents/${incidentId}/evidence-clip?token=${encodeURIComponent(token)}`;
+}

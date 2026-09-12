@@ -15,6 +15,7 @@ from app.models.camera import Camera
 from app.models.detection import Detection
 from app.models.event import Event
 from app.models.face_recognition_event import FaceRecognitionEvent, RecognitionStatus
+from app.models.incident import Incident
 from app.models.person import Person
 from app.schemas.analytics import AnalyticsSummary, HourlyCount, NamedCount
 
@@ -176,3 +177,17 @@ def get_face_recognition_report_data(
     top_people = [NamedCount(label=f"{first} {last}", count=count) for first, last, count in top_people_rows]
 
     return by_status, top_people
+
+
+def get_incident_type_report_data(db: Session, tenant_id: uuid.UUID | None, start: datetime, end: datetime) -> list[NamedCount]:
+    """Backs the PDF security report's AI Video Intelligence Incidents section — same
+    real GROUP BY approach as the rest of this module. Unlike get_face_recognition_
+    report_data, no extra permission gate is needed: Incidents are already visible to
+    anyone who can view the report (view_reports), the same as every other section."""
+    query = db.query(Incident.incident_type, func.count(Incident.id)).filter(
+        Incident.created_at >= start, Incident.created_at <= end, Incident.incident_type != "",
+    )
+    if tenant_id:
+        query = query.filter(Incident.tenant_id == tenant_id)
+    rows = query.group_by(Incident.incident_type).all()
+    return [NamedCount(label=incident_type, count=count) for incident_type, count in rows]

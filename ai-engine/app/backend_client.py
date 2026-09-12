@@ -79,6 +79,15 @@ class BackendClient:
         is still being written."""
         return self._safe_patch(f"/api/recordings/{recording_id}/internal", payload)
 
+    def get_pending_evidence_clips(self, recording_id: str) -> list[dict]:
+        """AI Video Intelligence Phase 1 (section 21) — called right after
+        SegmentRecorder.stop() finishes transcoding a segment, to find any Incidents
+        whose real evidence clip still needs trimming from this now-finalized file."""
+        return self._safe_get(f"/api/incidents/internal/pending-evidence-clips?recording_id={recording_id}")
+
+    def set_incident_evidence_clip(self, incident_id: str, payload: dict) -> dict | None:
+        return self._safe_patch(f"/api/incidents/{incident_id}/internal/evidence-clip", payload)
+
     def recognize_face(self, payload: dict) -> dict | None:
         """Sends a live candidate face embedding for server-side matching (Facial
         Recognition module). Like every other call here, a failure is swallowed by

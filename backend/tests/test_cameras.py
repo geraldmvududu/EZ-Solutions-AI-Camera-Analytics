@@ -125,3 +125,20 @@ def test_internal_active_cameras_default_recognition_cooldown_matches_model_defa
 
     resp = client.get("/api/cameras/internal/active", headers={"X-Internal-Token": "test-internal-token"})
     assert resp.json()[0]["recognition_cooldown_seconds"] == 30
+
+
+def test_internal_active_cameras_reflects_video_intelligence_tenant_kill_switch(client, admin_user):
+    """GET /cameras/internal/active flattens the tenant's VideoIntelligenceSettings
+    gate_jumping_enabled/tailgating_enabled/restricted_area_enabled onto each camera —
+    ai-engine checks these alongside each tripwire/zone's own opt-in flag, so a tenant
+    can kill a whole detection category without editing every tripwire/zone."""
+    token = login(client, admin_user.email)
+    client.post("/api/cameras", json={"name": "Front Gate", "source_type": "SIMULATED"}, headers=auth_headers(token))
+    client.put("/api/video-intelligence-settings", json={"gate_jumping_enabled": False}, headers=auth_headers(token))
+
+    resp = client.get("/api/cameras/internal/active", headers={"X-Internal-Token": "test-internal-token"})
+    assert resp.status_code == 200
+    camera = resp.json()[0]
+    assert camera["gate_jumping_enabled"] is False
+    assert camera["tailgating_enabled"] is True  # default, untouched
+    assert camera["restricted_area_enabled"] is True  # default, untouched

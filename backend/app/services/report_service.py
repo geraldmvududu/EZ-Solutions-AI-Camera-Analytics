@@ -64,13 +64,16 @@ def build_security_report_pdf(
     tenant_name: str,
     face_recognition_by_status: list[NamedCount] | None = None,
     top_recognized_people: list[NamedCount] | None = None,
+    video_intelligence_incidents: list[NamedCount] | None = None,
 ) -> bytes:
-    """The two face-recognition params are optional and independent of everything
-    else here: the caller (app/api/routes/reports.py) only passes them when the
-    requesting user actually has view_biometric_events, so a viewer without that
-    permission gets a complete report minus this section rather than a 403 on the
-    whole PDF. None skips the section entirely; an empty list still renders it with
-    a real "No data for this period." message, same as every other section here."""
+    """The face-recognition params are optional and independent of everything else
+    here: the caller (app/api/routes/reports.py) only passes them when the requesting
+    user actually has view_biometric_events, so a viewer without that permission gets
+    a complete report minus that section rather than a 403 on the whole PDF. None
+    skips a section entirely; an empty list still renders it with a real "No data for
+    this period." message, same as every other section here.
+    video_intelligence_incidents has no such gate — Incidents are already visible to
+    anyone who can view this report."""
     buffer = io.BytesIO()
     doc = SimpleDocTemplate(buffer, pagesize=letter, topMargin=0.75 * inch, bottomMargin=0.75 * inch)
     styles = getSampleStyleSheet()
@@ -119,6 +122,12 @@ def build_security_report_pdf(
         section("Face Recognition Activity", [[c.label, str(c.count)] for c in face_recognition_by_status], ["Status", "Count"])
     if top_recognized_people is not None:
         section("Top Recognized People", [[c.label, str(c.count)] for c in top_recognized_people], ["Person", "Appearances"])
+    if video_intelligence_incidents is not None:
+        section(
+            "AI Video Intelligence Incidents",
+            [[c.label.replace("_", " "), str(c.count)] for c in video_intelligence_incidents],
+            ["Category", "Count"],
+        )
 
     doc.build(story)
     return buffer.getvalue()

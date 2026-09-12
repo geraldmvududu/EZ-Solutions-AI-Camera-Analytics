@@ -19,6 +19,7 @@ from app.api.routes import (
     system,
     tripwires,
     users,
+    video_intelligence,
     ws,
     zones,
 )
@@ -43,4 +44,5 @@ api_router.include_router(analytics.router)
 api_router.include_router(reports.router)
 api_router.include_router(push_tokens.router)
 api_router.include_router(notifications.router)
+api_router.include_router(video_intelligence.router)
 api_router.include_router(ws.router)
