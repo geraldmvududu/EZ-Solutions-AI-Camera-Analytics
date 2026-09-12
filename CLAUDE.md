@@ -158,8 +158,8 @@ bundled/limited one) right after `stop()` closes the file, re-encoding to
 H.264/yuv420p/faststart and replacing the file in place so the existing DB row's
 `file_path` is unaffected. If ffmpeg is missing or the transcode fails, the original
 mp4v file is kept rather than losing the recording (still usable as evidence in
-VLC/ffplay, just not in-browser). See limitation 15 for the one piece of this that
-could not be verified from the Windows dev machine.
+VLC/ffplay, just not in-browser). Confirmed on the real deployed Ubuntu VM (not just
+the Windows dev machine) — see "Verified end-to-end" below.
 
 Two further real, narrowly-scoped features, not oversold: multi-frame confirmation
 (`app/api/routes/faces.py`, a module-level `_pending_confirmations` dict, same
@@ -229,8 +229,9 @@ cd ai-engine && pytest -q    # 48 tests: centroid tracker, zone/tripwire geometr
                               # recognition bug must never stop the capture loop), and
                               # SegmentRecorder (create-at-start/finalize-at-stop,
                               # the ffmpeg H.264 transcode step and its fallback paths —
-                              # subprocess mocked, since this dev machine has no
-                              # verified local ffmpeg build; see limitation 15)
+                              # subprocess mocked in this unit test; the real ffmpeg
+                              # binary itself is confirmed working end-to-end on the
+                              # deployed Ubuntu VM, see "Verified end-to-end")
 cd worker && pytest -q       # 6 tests: retention cleanup for recordings/snapshots/
                               # face-recognition-events/face-profiles against a real
                               # SQLite DB with a hand-crafted minimal schema — the
@@ -397,22 +398,7 @@ limitation 13), `FACE_PATH` (`/data/faces`, enrolled-photo storage).
    Dashboard/Enrolled People/..." tree sketched in the original spec — introducing
    nested-menu UI infrastructure used nowhere else in the app was judged out of scope
    for "don't redesign the existing application."
-15. **The recording H.264 transcode step (`SegmentRecorder._transcode_to_h264`,
-   see the Architecture section above) could not be fully verified end-to-end on this
-   Windows dev machine.** The bug it fixes (mp4v output being unplayable in Chrome) was
-   confirmed directly against a real recorded file in a real browser. The fix itself,
-   shelling out to the system `ffmpeg` binary, was verified by installing a real
-   `ffmpeg` build on the Windows dev machine (`winget install --id Gyan.FFmpeg`) and
-   confirming both the exact transcode command syntax and that its output plays
-   correctly in a real browser (`readyState: 4`, correct duration/dimensions,
-   `error: null`). What was not verified from this machine is the actual target
-   Linux deployment's `ffmpeg` (installed via apt in `ai-engine/Dockerfile`) doing this
-   for real, since the ai-engine container only runs on the deployed Ubuntu VM. Once
-   deployed: record a real clip, confirm it plays from the Recordings page, and check
-   `docker compose logs ai-engine` for "ffmpeg transcode failed"/"ffmpeg transcode
-   skipped" warnings, which would mean the fallback (original mp4v file, still saved as
-   evidence but not browser-playable) is silently in effect.
-16. **Multi-frame confirmation and liveness cooldown timing are not synced from
+15. **Multi-frame confirmation and liveness cooldown timing are not synced from
    tenant settings on the ai-engine side** (same underlying gap as limitation 13): a
    PENDING_CONFIRMATION result from `POST /api/faces/recognize` relies on ai-engine
    sending a second recognition attempt for the same (camera_id, tracking_id) within
@@ -582,3 +568,25 @@ limitation 13), `FACE_PATH` (`/data/faces`, enrolled-photo storage).
   the seek math (`event.occurred_at - recording.started_at`, not `alert.created_at`) is
   correct. `cd backend/ai-engine/worker && pytest -q` all green (100/48/6) and
   `cd frontend && npm run build` clean throughout.
+- **The recording H.264 transcode step, verified for real on the actual deployed
+  Ubuntu VM** (not just the Windows dev machine — this closes out what was previously
+  documented as an open gap). Pulled this Phase 2 code onto the VM, rebuilt
+  ai-engine/backend/worker/frontend, and let a real `VIDEO_FILE` camera run.
+  `docker compose logs ai-engine` showed zero `ffmpeg transcode failed`/`ffmpeg
+  transcode skipped` warnings across multiple completed recordings. Directly confirmed
+  with `ffprobe` inside the ai-engine container against an actual finalized recording
+  file: `codec_name=h264` (not the mp4v the file started as) — the real system ffmpeg
+  binary genuinely transcoded it. Also confirmed the `recordings` table itself shows
+  the create-at-start/finalize-at-stop pattern working live: the in-progress
+  recording's row had `ended_at=NULL`/`duration_seconds=0`/`file_size_bytes=0`, while
+  every prior row had real finalized values. Separately hit the real
+  `GET /api/recordings/{id}/play?token=` endpoint on the live backend with `curl`: a
+  plain request returned `200` with `content-type: video/mp4` and `accept-ranges:
+  bytes` and no `Content-Disposition` (confirming it plays inline, doesn't force a
+  download); a request with a `Range` header returned a correct `206 Partial Content`
+  with the matching `Content-Range` — exactly what a browser's `<video>` seek depends
+  on. (Along the way, fixed an unrelated SSH access snag on this VM: the automation
+  key in `~/.ssh/ez_vm_key` turned out to be passphrase-protected, which silently
+  breaks non-interactive/`BatchMode` SSH at the signing step with no clear server-side
+  error — generated a dedicated passphrase-free key for this automation instead of
+  ever handling the existing key's passphrase or the account password directly.)
