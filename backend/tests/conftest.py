@@ -1,7 +1,13 @@
 import os
+import tempfile
 
 os.environ["DATABASE_URL"] = "sqlite:///:memory:"
 os.environ["INTERNAL_SERVICE_TOKEN"] = "test-internal-token"
+# Face enrollment writes the uploaded photo to disk for real (app/api/routes/faces.py)
+# — route it to a temp dir instead of the default ./data/faces, or running the test
+# suite locally (outside Docker, where FACE_PATH isn't set to /data/faces) litters the
+# repo's backend/ directory with real JPEGs on every run.
+os.environ["FACE_PATH"] = os.path.join(tempfile.gettempdir(), "ez_test_faces")
 
 import fakeredis
 import pytest

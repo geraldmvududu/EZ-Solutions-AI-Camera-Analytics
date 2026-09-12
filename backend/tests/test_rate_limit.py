@@ -3,6 +3,7 @@ import redis
 import pytest
 
 from app.core import rate_limit
+from tests.conftest import auth_headers, login
 
 
 @pytest.fixture(autouse=True)
@@ -76,3 +77,26 @@ def test_does_not_retry_redis_on_every_call_during_cooldown(monkeypatch):
     for _ in range(10):
         rate_limit.is_rate_limited("10.0.0.2")
     assert call_count == 1  # no further attempts while the cooldown is active
+
+
+def test_internal_service_calls_are_exempt_from_rate_limiting(client):
+    """Real bug found deploying to the VM: ai-engine is one container fanning out
+    legitimate traffic (detections/events/snapshots/discovery-polling) for every
+    camera it's processing through one shared IP, so MAX_REQUESTS_PER_WINDOW — sized
+    for a single browser/user — got exceeded by normal operation, 429-ing ai-engine's
+    own pipeline into a lockout. Requests presenting a valid X-Internal-Token already
+    pass a separate, stronger auth check (require_internal_service) and must never be
+    subject to the per-IP abuse limiter at all (see app/main.py's rate_limit_middleware)."""
+    for _ in range(rate_limit.MAX_REQUESTS_PER_WINDOW + 50):
+        resp = client.get("/api/cameras/internal/active", headers={"X-Internal-Token": "test-internal-token"})
+        assert resp.status_code == 200
+
+
+def test_regular_authenticated_requests_are_still_rate_limited(client, admin_user):
+    """Regression guard for the exemption above: it must not accidentally exempt
+    everything — a normal (non-internal-token) client is still subject to the limit."""
+    token = login(client, admin_user.email)
+    last_status = None
+    for _ in range(rate_limit.MAX_REQUESTS_PER_WINDOW + 5):
+        last_status = client.get("/api/cameras", headers=auth_headers(token)).status_code
+    assert last_status == 429

@@ -44,8 +44,20 @@ async def security_headers(request: Request, call_next):
 # ---- Redis-backed rate limiter (per client IP) — see app/core/rate_limit.py ----
 # Shared across every backend replica via Redis, unlike a process-local counter, and
 # fails open to a per-process in-memory fallback if Redis itself is unreachable.
+#
+# Trusted server-to-server callers (ai-engine, worker — anything presenting a valid
+# X-Internal-Token) are exempt: they already pass a separate, stronger auth check
+# (app/core/deps.py::require_internal_service) than the abuse protection this limiter
+# exists for, and a single ai-engine container fans out real, legitimate traffic for
+# every camera it's processing through one shared IP — MAX_REQUESTS_PER_WINDOW was
+# sized for a single browser/user, not an aggregate of every active camera worker, so
+# without this exemption a moderately busy deployment eventually 429s its own AI
+# pipeline (detections, events, snapshots, even the discovery-loop polling) into a
+# permanent lockout once its steady-state request rate crosses the per-IP budget.
 @app.middleware("http")
 async def rate_limit_middleware(request: Request, call_next):
+    if request.headers.get("X-Internal-Token") == settings.internal_service_token:
+        return await call_next(request)
     client_ip = request.client.host if request.client else "unknown"
     limited = await to_thread.run_sync(rate_limit.is_rate_limited, client_ip)
     if limited:

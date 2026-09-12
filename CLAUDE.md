@@ -224,7 +224,13 @@ limitation 13), `FACE_PATH` (`/data/faces`, enrolled-photo storage).
 5. **Rate limiting** (`app/core/rate_limit.py`) is now Redis-backed (fixed-window
    INCR+EXPIRE, shared correctly across replicas), with a circuit-breaker fallback to
    a per-process in-memory counter if Redis is unreachable — see "Verified end-to-end"
-   below for a real latency bug this caught and fixed.
+   below for a real latency bug this caught and fixed, and for a real self-DoS bug
+   (ai-engine 429-ing its own traffic) found deploying the Facial Recognition module.
+   `app/main.py::rate_limit_middleware` now exempts any request carrying a valid
+   `X-Internal-Token` from the per-IP limit entirely — internal server-to-server calls
+   already pass a separate, stronger auth check
+   (`app/core/deps.py::require_internal_service`) than the abuse protection this
+   limiter exists for.
 6. Analytics/reports (section 36) are done, with one honest caveat: "camera status
    summary" reflects each camera's *current* status, not a historical uptime
    percentage — there's no periodic status-history table yet, only point-in-time
@@ -371,6 +377,21 @@ limitation 13), `FACE_PATH` (`/data/faces`, enrolled-photo storage).
   the real timeout path. Fixed with a circuit breaker (skip Redis entirely for 10s
   after one failure); re-measured: first request ~2.1s, every request after that
   8-10ms. Covered by `tests/test_rate_limit.py::test_does_not_retry_redis_on_every_call_during_cooldown`.
+- Real deployment of the Facial Recognition module to the VM surfaced a second,
+  unrelated real bug in the same rate limiter: `docker compose logs backend` showed
+  ai-engine's own `POST /api/detections`/`/api/events`/`/api/snapshots`/`/api/recordings`
+  and even its `GET /api/cameras/internal/active` discovery polling all returning 429
+  — the per-IP limiter (300 req/60s, sized for one browser/user) was blocking
+  ai-engine's own aggregate traffic, which shares one container IP across every camera
+  worker it runs. This was already possible before Facial Recognition existed
+  (multiple active cameras alone can exceed 300 req/min from one ai-engine instance)
+  but wasn't yet observed until this deployment's traffic pattern crossed the
+  threshold. Fixed by exempting valid-`X-Internal-Token` requests from the limiter
+  entirely (`app/main.py::rate_limit_middleware`) — confirmed no exemption existed
+  previously (the middleware only ever checked `client_ip`). Covered by
+  `tests/test_rate_limit.py::test_internal_service_calls_are_exempt_from_rate_limiting`
+  and `::test_regular_authenticated_requests_are_still_rate_limited` (regression guard
+  that the exemption doesn't accidentally disable rate limiting for real users).
 - Facial Recognition, end-to-end in a real browser against a real (unmocked) backend:
   submitted a real multipart upload through the actual `/faces/enroll` UI with a
   synthetic (non-face) test image — the real, un-mocked OpenCV Haar cascade correctly
