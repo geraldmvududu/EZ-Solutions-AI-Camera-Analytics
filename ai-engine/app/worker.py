@@ -19,6 +19,7 @@ from app.config import get_settings
 from app.core.motion import MotionDetector
 from app.core.overlay import draw_overlay
 from app.core.privacy import apply_privacy_masks
+from app.core.face_recognizer import FaceRecognizer
 from app.core.recorder import SegmentRecorder
 from app.core.snapshotter import save_snapshot
 from app.core.tracker import CentroidTracker
@@ -45,6 +46,8 @@ class CameraWorker:
         self.zones = [z for z in zones if z["camera_id"] == self.camera_id]
         self.tripwires = [t for t in tripwires if t["camera_id"] == self.camera_id]
         self._privacy_zones = [z for z in self.zones if z["zone_type"] == "PRIVACY"]
+        self._face_zones = [z for z in self.zones if z["zone_type"] in ("FACE_DETECTION", "FACE_EXCLUSION")]
+        self._face_recognizer = FaceRecognizer(self.camera_id) if camera.get("face_recognition_enabled") else None
 
         self._stop_event = threading.Event()
         self._thread = threading.Thread(target=self._run, daemon=True, name=f"camera-{camera['camera_code']}")
@@ -183,6 +186,9 @@ class CameraWorker:
             centroid = ((detection.x + detection.width / 2), (detection.y + detection.height / 2))
             self._check_tripwires(track_id, centroid, frame, detection_id)
             self._check_zones(track_id, centroid, frame, detection_id)
+
+            if self._face_recognizer and detection.object_type == "PERSON":
+                self._face_recognizer.maybe_recognize(self.camera, frame, track_id, detection, centroid, self._face_zones)
 
     def _emit_object_event(self, frame, detection, detection_id) -> None:
         event_type = "PERSON_DETECTED" if detection.object_type == "PERSON" else (

@@ -14,11 +14,13 @@ data/uploads/*
 data/models/*
 data/logs/*
 data/nginx-certs/*
+data/faces/*
 !data/recordings/.gitkeep
 !data/snapshots/.gitkeep
 !data/uploads/.gitkeep
 !data/models/.gitkeep
 !data/logs/.gitkeep
+!data/faces/.gitkeep
 backups/
 
 # Large binary assets

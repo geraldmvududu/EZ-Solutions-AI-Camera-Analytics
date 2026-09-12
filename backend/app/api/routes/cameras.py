@@ -95,6 +95,10 @@ def create_camera(
         recording_mode=payload.recording_mode,
         retention_days=payload.retention_days,
         confidence_threshold=payload.confidence_threshold,
+        face_recognition_enabled=payload.face_recognition_enabled,
+        face_recognition_threshold=payload.face_recognition_threshold,
+        face_operating_hours_start=payload.face_operating_hours_start,
+        face_operating_hours_end=payload.face_operating_hours_end,
     )
     db.add(camera)
     db.commit()

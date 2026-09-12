@@ -21,6 +21,10 @@ export interface CameraCreatePayload {
   motion_detection_enabled?: boolean;
   recording_enabled?: boolean;
   confidence_threshold?: number;
+  face_recognition_enabled?: boolean;
+  face_recognition_threshold?: number;
+  face_operating_hours_start?: string;
+  face_operating_hours_end?: string;
 }
 
 export const listCameras = () => apiRequest<Camera[]>("/api/cameras");

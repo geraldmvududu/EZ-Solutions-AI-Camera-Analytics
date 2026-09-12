@@ -95,6 +95,40 @@ export async function apiRequest<T>(path: string, options: RequestOptions = {}):
   return resp.json() as Promise<T>;
 }
 
+// Separate from apiRequest because a multipart body must NOT get the
+// Content-Type: application/json header (or a JSON.stringify'd body) — the browser
+// needs to set its own multipart boundary. Used only by the face-enrollment upload.
+export async function apiUpload<T>(path: string, formData: FormData): Promise<T> {
+  const doFetch = async (): Promise<Response> => {
+    const headers: Record<string, string> = {};
+    const token = tokenStore.getAccess();
+    if (token) headers["Authorization"] = `Bearer ${token}`;
+    return fetch(`${API_URL}${path}`, { method: "POST", headers, body: formData });
+  };
+
+  let resp = await doFetch();
+  if (resp.status === 401) {
+    if (!refreshPromise) {
+      refreshPromise = refreshAccessToken().finally(() => {
+        refreshPromise = null;
+      });
+    }
+    if (await refreshPromise) resp = await doFetch();
+  }
+
+  if (!resp.ok) {
+    let detail = resp.statusText;
+    try {
+      const data = await resp.json();
+      detail = typeof data.detail === "string" ? data.detail : JSON.stringify(data.detail);
+    } catch {
+      /* response had no JSON body */
+    }
+    throw new ApiError(resp.status, detail);
+  }
+  return resp.json() as Promise<T>;
+}
+
 export function wsUrl(path: string): string {
   // In production, VITE_API_URL is "" (nginx proxies same-origin /api and /ws to the
   // backend), so build the WS URL from the page's own origin. In dev, VITE_API_URL is

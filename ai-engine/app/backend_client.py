@@ -69,6 +69,13 @@ class BackendClient:
     def create_recording(self, payload: dict) -> dict | None:
         return self._safe_post("/api/recordings", payload)
 
+    def recognize_face(self, payload: dict) -> dict | None:
+        """Sends a live candidate face embedding for server-side matching (Facial
+        Recognition module). Like every other call here, a failure is swallowed by
+        _safe_post and logged — a face-recognition outage must never stop the camera's
+        recording/detection pipeline (spec section 19)."""
+        return self._safe_post("/api/faces/recognize", payload)
+
     def _safe_post(self, path: str, payload: dict) -> dict | None:
         try:
             resp = self._client.post(path, json=payload)

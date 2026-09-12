@@ -90,9 +90,13 @@ def hash_token(token: str) -> str:
 # ---- Camera credential encryption at rest (section 14/46) ----
 
 
-def _fernet() -> Fernet:
-    key_material = hashlib.sha256(settings.credential_encryption_key.encode("utf-8")).digest()
+def _fernet_for(key_material_str: str) -> Fernet:
+    key_material = hashlib.sha256(key_material_str.encode("utf-8")).digest()
     return Fernet(base64.urlsafe_b64encode(key_material))
+
+
+def _fernet() -> Fernet:
+    return _fernet_for(settings.credential_encryption_key)
 
 
 def encrypt_secret(plain_text: str) -> str:
@@ -105,3 +109,24 @@ def decrypt_secret(cipher_text: str) -> str:
     if not cipher_text:
         return ""
     return _fernet().decrypt(cipher_text.encode("utf-8")).decode("utf-8")
+
+
+# ---- Face embedding encryption at rest (Facial Recognition module, section 14) ----
+# Deliberately a SEPARATE key from credential encryption above — a leaked camera-
+# credential key must not also expose biometric templates.
+
+
+def _face_fernet() -> Fernet:
+    return _fernet_for(settings.face_embedding_encryption_key)
+
+
+def encrypt_face_embedding(plain_text: str) -> str:
+    if not plain_text:
+        return ""
+    return _face_fernet().encrypt(plain_text.encode("utf-8")).decode("utf-8")
+
+
+def decrypt_face_embedding(cipher_text: str) -> str:
+    if not cipher_text:
+        return ""
+    return _face_fernet().decrypt(cipher_text.encode("utf-8")).decode("utf-8")

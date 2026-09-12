@@ -63,6 +63,15 @@ class Camera(Base, UUIDPKMixin, TimestampMixin, TenantScopedMixin):
 
     confidence_threshold: Mapped[float] = mapped_column(Float, default=0.5, nullable=False)
 
+    # Facial Recognition & Identity Analytics (section 5) — mirrors the ai_enabled/
+    # confidence_threshold pattern above rather than a separate per-camera settings
+    # table. Operating hours are plain "HH:MM" strings, same convention as
+    # AIRule.conditions.time_start/time_end in app/services/rule_engine.py.
+    face_recognition_enabled: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    face_recognition_threshold: Mapped[float | None] = mapped_column(Float, nullable=True)
+    face_operating_hours_start: Mapped[str] = mapped_column(String(5), nullable=False, default="")
+    face_operating_hours_end: Mapped[str] = mapped_column(String(5), nullable=False, default="")
+
     status: Mapped[CameraStatus] = mapped_column(Enum(CameraStatus), default=CameraStatus.OFFLINE, nullable=False)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     is_demo: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)

@@ -34,6 +34,10 @@ export interface Camera {
   recording_mode: RecordingMode;
   retention_days: number;
   confidence_threshold: number;
+  face_recognition_enabled: boolean;
+  face_recognition_threshold: number | null;
+  face_operating_hours_start: string;
+  face_operating_hours_end: string;
   status: CameraStatus;
   is_active: boolean;
   is_demo: boolean;
@@ -52,7 +56,9 @@ export type EventType =
   | "CAMERA_OFFLINE"
   | "CAMERA_ONLINE"
   | "RECORDING_FAILURE"
-  | "AI_DETECTION";
+  | "AI_DETECTION"
+  | "FACE_RECOGNIZED"
+  | "UNKNOWN_FACE_DETECTED";
 
 export interface EventItem {
   id: string;
@@ -117,6 +123,74 @@ export interface SystemHealth {
   ram_percent: number;
   disk_percent: number;
   ai_device: string;
+}
+
+// ---- Facial Recognition & Identity Analytics ----
+
+export type PersonCategory = "EMPLOYEE" | "CONTRACTOR" | "VISITOR" | "AUTHORIZED_PERSON" | "WATCHLIST";
+export type PersonStatus = "ACTIVE" | "SUSPENDED" | "DELETED";
+export type RecognitionStatus = "RECOGNIZED" | "UNKNOWN" | "LOW_CONFIDENCE";
+
+export interface FaceProfileItem {
+  id: string;
+  person_id: string;
+  model_version: string;
+  quality_score: number;
+  enrollment_date: string;
+  status: "ACTIVE" | "SUSPENDED" | "DELETED";
+}
+
+export interface PersonItem {
+  id: string;
+  tenant_id: string;
+  external_reference: string;
+  first_name: string;
+  last_name: string;
+  category: PersonCategory;
+  department: string;
+  notes: string;
+  status: PersonStatus;
+  created_at: string;
+  updated_at: string;
+  expires_at: string | null;
+  face_profiles: FaceProfileItem[];
+}
+
+export interface EnrollmentResult {
+  success: boolean;
+  message: string;
+  person: PersonItem | null;
+  quality_score: number | null;
+}
+
+export interface FaceRecognitionEventItem {
+  id: string;
+  tenant_id: string;
+  event_id: string;
+  camera_id: string;
+  person_id: string | null;
+  confidence_score: number;
+  recognition_status: RecognitionStatus;
+  model_version: string;
+  event_timestamp: string;
+  snapshot_id: string | null;
+  recording_id: string | null;
+  reviewed: boolean;
+  review_decision: string;
+  review_notes: string;
+  reviewed_by: string | null;
+  review_timestamp: string | null;
+  created_at: string;
+}
+
+export interface FaceStatistics {
+  recognized_today: number;
+  unknown_faces_today: number;
+  active_alerts: number;
+  high_severity_active: number;
+  violations_today: number;
+  after_hours_events_today: number;
+  restricted_area_events_today: number;
 }
 
 export interface UserItem {

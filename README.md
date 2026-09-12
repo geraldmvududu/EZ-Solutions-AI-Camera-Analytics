@@ -140,6 +140,24 @@ A PRIVACY zone genuinely blurs that region in real time (before recording, AI
 detection, or the live view ever see it) — the ai-engine picks up the change within
 one discovery cycle, no restart needed.
 
+### Enroll a person and test facial recognition
+
+1. Go to **Enroll Person**, fill in name/category, and upload one clear, well-lit,
+   single-face photo (JPG/PNG). Multi-face, no-face, blurry, or poorly-lit images are
+   rejected automatically with a specific reason — this is real OpenCV Haar-cascade
+   detection plus real blur/lighting scoring, not a placeholder check.
+2. On **Cameras**, edit (or create) a camera and enable **Facial Recognition** —
+   optionally set a per-camera match threshold and operating hours.
+3. Point that camera at footage containing the enrolled person's actual face (a
+   synthetic/simulated camera has no real face in it, so recognition will correctly
+   never fire on one — use a real `VIDEO_FILE` clip or webcam).
+4. Within one recognition cycle, a `FACE_RECOGNIZED` (or `UNKNOWN_FACE_DETECTED`, for
+   an unenrolled face) event appears on **Face Dashboard** / **Recognition Events** /
+   the regular **Events** page. To also see it as an **Alert**, add a rule on the
+   **Rules** page with trigger event type `FACE_RECOGNIZED` (or `UNKNOWN_FACE_DETECTED`).
+5. Draw a `FACE_DETECTION` or `FACE_EXCLUSION` zone on **Zones & Tripwires** to
+   restrict where on that camera's frame recognition runs at all.
+
 ### 1.11 Logs
 
 ```bash
@@ -186,6 +204,8 @@ Migrations run automatically on backend startup.
 | `./scripts/backup.sh` or `restore.sh` fails with `.env: line N: <word>: command not found` | An unquoted `.env` value contains a space (e.g. `INITIAL_TENANT_NAME=EZ Solutions`) and got word-split by the shell. Quote the value (`INITIAL_TENANT_NAME="EZ Solutions"`). Fixed in the repo's `.env.example`, and the scripts no longer `source .env` wholesale — but a hand-edited `.env` with a new unquoted, space-containing value can still break other tooling that sources it |
 | Login fails after `docker compose up` | Bootstrap may not have run yet — check `docker compose logs backend` for "Created bootstrap Super Admin" |
 | 401 errors in the browser console | Access tokens expire in 15 minutes by default; the frontend auto-refreshes — if it still fails, clear localStorage and log in again |
+| Face enrollment always says "No face detected in image" | The real OpenCV Haar cascade needs a genuinely photographic, front-facing, well-lit human face — synthetic/cartoon/heavily-cropped images will correctly fail this. Not a bug: `ai-engine/tests`/`backend/tests` cover the algorithm directly with real face images and synthetic patterns respectively |
+| A camera with Facial Recognition enabled never produces `FACE_RECOGNIZED`/`UNKNOWN_FACE_DETECTED` events | Check, in order: the camera's `face_recognition_enabled` is actually ON, no `FACE_EXCLUSION` zone covers the whole frame (or a `FACE_DETECTION` zone exists but doesn't cover where people actually appear), the camera's operating-hours window (if set) covers the current time, and `docker compose logs ai-engine` for real per-frame quality-gate rejections (too small/blurry/dark) |
 | No live dashboard updates | Check `/ws/live` isn't blocked — nginx's `/ws/` location must support `Upgrade`/`Connection` headers (already configured in `nginx/nginx.conf`) |
 
 ## 2. Architecture
@@ -195,7 +215,7 @@ Camera Source (file / simulated / webcam / RTSP / MJPEG / IP camera)
         │
         ▼
 ai-engine (OpenCV capture → motion detection → AI detection → tracking →
-           zone/tripwire/loitering evaluation → snapshot/recording)
+           zone/tripwire/loitering evaluation → face recognition* → snapshot/recording)
         │  HTTP (internal-service token)
         ▼
 backend (FastAPI): stores Detections/Events → rule engine → Alerts →
@@ -203,6 +223,14 @@ backend (FastAPI): stores Detections/Events → rule engine → Alerts →
         │
         ▼
 frontend (React/TS dashboard)  +  mobile app (same API)
+
+* Face recognition (Facial Recognition & Identity Analytics module): runs only on
+  already-tracked PERSON detections, with a per-track cooldown, optional
+  FACE_DETECTION/FACE_EXCLUSION zones, and operating hours — never every frame. Face
+  detection + a real LBP-histogram embedding are computed locally (no downloaded
+  model), sent to the backend's POST /api/faces/recognize for server-side matching,
+  and the resulting event rides the exact same rule-engine/Alert/WebSocket/push
+  pipeline as every other event type.
 ```
 
 Services (`docker-compose.yml`): `postgres`, `redis`, `backend`, `ai-engine`, `worker`
@@ -238,8 +266,8 @@ python -m app.main
 ## 4. Testing
 
 ```bash
-cd backend && .venv/bin/pytest -q
-cd ai-engine && .venv/bin/pytest -q
+cd backend && .venv/bin/pytest -q   # 77 tests, including the Facial Recognition module
+cd ai-engine && .venv/bin/pytest -q # 32 tests, including FaceRecognizer
 cd frontend && npm run build      # type-checks + production build
 cd mobile && npx tsc --noEmit     # type-checks
 ```
@@ -296,8 +324,9 @@ CA-trusted cert without a real domain (see `scripts/setup-letsencrypt.sh`).
   `data/nginx-certs/`, and installs a renewal hook so it keeps itself current. This
   step needs a domain and public DNS only you can provide — it can't be automated
   further than this.
-- Rotate `JWT_SECRET`, `JWT_REFRESH_SECRET`, `CREDENTIAL_ENCRYPTION_KEY`, and all
-  passwords in `.env` before going live; never commit `.env`.
+- Rotate `JWT_SECRET`, `JWT_REFRESH_SECRET`, `CREDENTIAL_ENCRYPTION_KEY`,
+  `FACE_EMBEDDING_ENCRYPTION_KEY` (must differ from `CREDENTIAL_ENCRYPTION_KEY`), and
+  all passwords in `.env` before going live; never commit `.env`.
 - The rate limiter (`app/core/rate_limit.py`) is Redis-backed, so its limits are shared
   correctly across multiple backend replicas — no action needed there. It fails open
   to a per-process in-memory fallback (with a 10s circuit-breaker cooldown, so a Redis

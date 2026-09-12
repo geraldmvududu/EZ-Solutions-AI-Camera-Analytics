@@ -43,6 +43,18 @@ class Settings(BaseSettings):
     # Credential encryption (Fernet key, 32 url-safe base64-encoded bytes)
     credential_encryption_key: str = "dev-only-insecure-fernet-key-please-change=="
 
+    # Facial Recognition & Identity Analytics (section 21) — deliberately a separate
+    # key from credential_encryption_key above.
+    face_recognition_enabled: bool = True
+    face_match_threshold: float = 0.85
+    face_min_quality: float = 0.70
+    face_event_cooldown: int = 30
+    face_retention_days: int = 90
+    face_image_retention_days: int = 30
+    face_embedding_encryption_key: str = "dev-only-insecure-face-fernet-key-please-change=="
+    face_model_version: str = "lbph-v1"
+    face_path: str = "./data/faces"
+
     # Bootstrap
     initial_tenant_name: str = "EZ Solutions"
     bootstrap_admin_email: str = "admin@ezsolutions.local"

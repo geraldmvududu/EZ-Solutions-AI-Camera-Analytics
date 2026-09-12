@@ -15,6 +15,10 @@ function CameraFormModal({ onClose, onCreated }: { onClose: () => void; onCreate
   const [streamUrl, setStreamUrl] = useState("");
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
+  const [faceRecognitionEnabled, setFaceRecognitionEnabled] = useState(false);
+  const [faceThreshold, setFaceThreshold] = useState("");
+  const [faceHoursStart, setFaceHoursStart] = useState("");
+  const [faceHoursEnd, setFaceHoursEnd] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
 
@@ -31,6 +35,10 @@ function CameraFormModal({ onClose, onCreated }: { onClose: () => void; onCreate
         stream_url: ["RTSP", "HTTP_MJPEG", "IP_CAMERA"].includes(sourceType) ? streamUrl : undefined,
         username: username || undefined,
         password: password || undefined,
+        face_recognition_enabled: faceRecognitionEnabled,
+        face_recognition_threshold: faceThreshold ? Number(faceThreshold) : undefined,
+        face_operating_hours_start: faceHoursStart || undefined,
+        face_operating_hours_end: faceHoursEnd || undefined,
       });
       onCreated();
       onClose();
@@ -91,6 +99,35 @@ function CameraFormModal({ onClose, onCreated }: { onClose: () => void; onCreate
             </div>
           </>
         )}
+
+        <div className="border-t border-base-700 pt-3">
+          <label className="flex items-center gap-2 text-sm text-slate-300 mb-2">
+            <input type="checkbox" checked={faceRecognitionEnabled} onChange={(e) => setFaceRecognitionEnabled(e.target.checked)} />
+            Facial Recognition
+          </label>
+          {faceRecognitionEnabled && (
+            <div className="space-y-2">
+              <div>
+                <label className="block text-xs text-slate-400 mb-1">Recognition threshold (0-1, blank = tenant default)</label>
+                <input
+                  type="number" min={0} max={1} step={0.01} value={faceThreshold}
+                  onChange={(e) => setFaceThreshold(e.target.value)}
+                  className="w-full rounded bg-base-800 border border-base-600 px-3 py-1.5 text-sm text-slate-100"
+                />
+              </div>
+              <div className="grid grid-cols-2 gap-2">
+                <div>
+                  <label className="block text-xs text-slate-400 mb-1">Operating hours start</label>
+                  <input type="time" value={faceHoursStart} onChange={(e) => setFaceHoursStart(e.target.value)} className="w-full rounded bg-base-800 border border-base-600 px-3 py-1.5 text-sm text-slate-100" />
+                </div>
+                <div>
+                  <label className="block text-xs text-slate-400 mb-1">Operating hours end</label>
+                  <input type="time" value={faceHoursEnd} onChange={(e) => setFaceHoursEnd(e.target.value)} className="w-full rounded bg-base-800 border border-base-600 px-3 py-1.5 text-sm text-slate-100" />
+                </div>
+              </div>
+            </div>
+          )}
+        </div>
 
         <div className="flex justify-end gap-2 pt-2">
           <button type="button" onClick={onClose} className="px-3 py-1.5 text-sm rounded border border-base-600 text-slate-300">
@@ -161,6 +198,7 @@ export function CamerasPage() {
               <th className="text-left px-4 py-2">Status</th>
               <th className="text-left px-4 py-2">AI</th>
               <th className="text-left px-4 py-2">Recording</th>
+              <th className="text-left px-4 py-2">Face Rec.</th>
               <th className="text-left px-4 py-2">Actions</th>
             </tr>
           </thead>
@@ -176,6 +214,7 @@ export function CamerasPage() {
                 </td>
                 <td className="px-4 py-2 text-slate-400">{cam.ai_enabled ? "ON" : "OFF"}</td>
                 <td className="px-4 py-2 text-slate-400">{cam.recording_enabled ? "ON" : "OFF"}</td>
+                <td className="px-4 py-2 text-slate-400">{cam.face_recognition_enabled ? "ON" : "OFF"}</td>
                 <td className="px-4 py-2">
                   <div className="flex items-center gap-3">
                     <button onClick={() => handleTest(cam.id)} className="text-accent-500 hover:underline text-xs">
@@ -191,7 +230,7 @@ export function CamerasPage() {
             ))}
             {cameras.length === 0 && (
               <tr>
-                <td colSpan={8} className="px-4 py-8 text-center text-slate-500">
+                <td colSpan={9} className="px-4 py-8 text-center text-slate-500">
                   No cameras yet. Add one to get started.
                 </td>
               </tr>

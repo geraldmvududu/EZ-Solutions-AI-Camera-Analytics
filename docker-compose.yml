@@ -45,6 +45,7 @@ services:
       - ./data/snapshots:/data/snapshots
       - ./data/uploads:/data/uploads
       - ./data/models:/data/models
+      - ./data/faces:/data/faces
     depends_on:
       postgres:
         condition: service_healthy

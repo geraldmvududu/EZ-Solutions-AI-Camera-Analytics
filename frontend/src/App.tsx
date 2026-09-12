@@ -15,6 +15,10 @@ import { UsersPage } from "./pages/Users";
 import { AuditLogsPage } from "./pages/AuditLogs";
 import { AnalyticsPage } from "./pages/Analytics";
 import { ZonesEditorPage } from "./pages/ZonesEditor";
+import { FaceDashboardPage } from "./pages/faces/FaceDashboard";
+import { EnrollPersonPage } from "./pages/faces/EnrollPerson";
+import { EnrolledPeoplePage } from "./pages/faces/EnrolledPeople";
+import { RecognitionEventsPage } from "./pages/faces/RecognitionEvents";
 
 export default function App() {
   return (
@@ -51,6 +55,38 @@ export default function App() {
           }
         />
         <Route path="/incidents" element={<ProtectedRoute><IncidentsPage /></ProtectedRoute>} />
+        <Route
+          path="/faces"
+          element={
+            <ProtectedRoute permission="view_biometric_events">
+              <FaceDashboardPage />
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="/faces/enrolled"
+          element={
+            <ProtectedRoute permission="view_biometric_events">
+              <EnrolledPeoplePage />
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="/faces/enroll"
+          element={
+            <ProtectedRoute permission="manage_biometrics">
+              <EnrollPersonPage />
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="/faces/events"
+          element={
+            <ProtectedRoute permission="view_biometric_events">
+              <RecognitionEventsPage />
+            </ProtectedRoute>
+          }
+        />
         <Route
           path="/analytics"
           element={

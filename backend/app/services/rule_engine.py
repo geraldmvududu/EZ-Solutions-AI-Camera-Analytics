@@ -47,6 +47,24 @@ def _rule_matches(rule: AIRule, event: Event) -> bool:
     if object_type and event.event_metadata.get("object_type") != object_type:
         return False
 
+    # Facial Recognition & Identity Analytics (section 8): person_category/
+    # person_status are read from event_metadata, which
+    # app/api/routes/faces.py::_report_recognition_event populates for every
+    # FACE_RECOGNIZED/UNKNOWN_FACE_DETECTED event — this is what lets "Suspended
+    # Person", "Expired Access", and "Watchlist Match" rules work without a
+    # dedicated recognition_alerts table or a parallel rule engine.
+    person_category = cond.get("person_category")
+    if person_category:
+        allowed = person_category if isinstance(person_category, list) else [person_category]
+        if event.event_metadata.get("person_category") not in allowed:
+            return False
+
+    person_status = cond.get("person_status")
+    if person_status:
+        allowed = person_status if isinstance(person_status, list) else [person_status]
+        if event.event_metadata.get("person_status") not in allowed:
+            return False
+
     min_confidence = cond.get("min_confidence")
     if min_confidence is not None:
         confidence = event.event_metadata.get("confidence")

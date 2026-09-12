@@ -57,6 +57,43 @@ mobile wraps the same URL in a `react-native-webview` `<WebView>` because React
 Native's native `<Image>` component can't decode `multipart/x-mixed-replace`, but a
 WebView's underlying browser engine can.
 
+**Facial Recognition & Identity Analytics** (`app/api/routes/faces.py`,
+`app/services/face_embedding.py`): a real, self-contained biometric pipeline — no
+downloaded model weights, matching the same offline-build constraint that already
+shaped the HOG person detector (limitation 3). Face detection is OpenCV's bundled
+Haar cascade; the "embedding" is a genuine classic Local Binary Patterns histogram
+descriptor computed directly (not a deep-learning embedding) — real inference, modest
+accuracy, fully reproducible without internet access at build or run time.
+`app/services/face_embedding.py` is intentionally duplicated byte-for-byte at
+`ai-engine/app/core/face_embedding.py`: enrollment-time embedding generation is a
+synchronous backend upload-request concern, while live-recognition-time embedding
+generation happens per-frame in the ai-engine — there's no shared-package
+infrastructure in this monorepo to unify them without a bigger architectural change
+than this feature warranted. `FACE_MODEL_VERSION` exists specifically to detect drift
+between the two copies.
+
+The module deliberately reuses almost the entire existing event/alert pipeline rather
+than building a parallel one: `ai-engine/app/core/face_recognizer.py` runs on already-
+tracked PERSON detections (never every frame), applies a cooldown + FACE_DETECTION/
+FACE_EXCLUSION zones (two new `ZoneType` values on the existing `Zone` model/geometry)
++ per-camera operating hours, then POSTs the live candidate embedding to the internal
+`POST /api/faces/recognize` endpoint. That endpoint does the actual decrypt+compare
+against every enrolled `FaceProfile` in the camera's tenant, creates a real `Event`
+(two new `EventType` values, `FACE_RECOGNIZED`/`UNKNOWN_FACE_DETECTED`) plus a
+`FaceRecognitionEvent` detail row, and calls the exact same
+`rule_engine.evaluate_event()` / WebSocket broadcast / `notify_users_of_alert()` path
+that every other event type already uses — so face-triggered `Alert` rows, real-time
+dashboard updates, and mobile push notifications work with zero new plumbing. Two new
+`_rule_matches()` condition keys, `person_category` and `person_status`, are what make
+"Suspended Person"/"Watchlist Match"/etc. rules possible; `zone_id`/`min_confidence`/
+`time_start`/`time_end` conditions already worked unchanged. Embeddings are Fernet-
+encrypted at rest with a **separate** key from camera-credential encryption
+(`FACE_EMBEDDING_ENCRYPTION_KEY`) and are never returned by any list/detail API
+response — only a dedicated, permission-gated `/faces/{id}/photo` endpoint serves the
+enrolled image itself. Biometric-specific audit actions (`FACE_ENROLL`, `FACE_VIEW`,
+`FACE_MODIFY`, `FACE_DELETE`) reuse the existing generic `AuditLog`/`log_action` —
+there is no separate biometric audit table.
+
 ## Development commands
 
 ```bash
@@ -79,16 +116,22 @@ cd ai-engine && python -m app.main
 ## Testing commands
 
 ```bash
-cd backend && pytest -q      # 46 tests: auth, RBAC, tenant isolation, camera CRUD,
+cd backend && pytest -q      # 77 tests: auth, RBAC, tenant isolation, camera CRUD,
                               # credential encryption, rule engine, analytics aggregates,
                               # report export, the Redis-backed rate limiter (fakeredis),
-                              # and push notifications (Expo API call mocked) — all
-                              # against a real in-memory SQLite DB through the actual
-                              # FastAPI app
-cd ai-engine && pytest -q    # 21 tests: centroid tracker, zone/tripwire geometry,
+                              # push notifications (Expo API call mocked), and facial
+                              # recognition (enrollment quality gates/duplicate detection,
+                              # the real LBP algorithm unmocked, recognition matching,
+                              # person_category/status rule conditions, tenant isolation
+                              # of biometric data, audit logging) — all against a real
+                              # in-memory SQLite DB through the actual FastAPI app
+cd ai-engine && pytest -q    # 32 tests: centroid tracker, zone/tripwire geometry,
                               # loitering timer, motion detection (real MOG2 background
                               # subtraction against synthetic frames), privacy-zone
-                              # blurring, and the discovery-loop config fingerprint
+                              # blurring, the discovery-loop config fingerprint, and the
+                              # FaceRecognizer pipeline (cooldown, zone filtering,
+                              # exception-safety — a recognition bug must never stop
+                              # the capture loop)
 cd frontend && npm run build # TypeScript strict-mode compile + production bundle
 ```
 
@@ -114,6 +157,12 @@ docker-compose.yml) and `frontend/.env.example`. Key ones: `DATABASE_URL`,
 `JWT_SECRET`/`JWT_REFRESH_SECRET`, `CREDENTIAL_ENCRYPTION_KEY` (Fernet-derived, encrypts
 camera passwords at rest), `INTERNAL_SERVICE_TOKEN` (must match between backend and
 ai-engine), `AI_DEVICE` (cpu — GPU is an optional future path, never required).
+Facial-recognition-specific: `FACE_EMBEDDING_ENCRYPTION_KEY` (must differ from
+`CREDENTIAL_ENCRYPTION_KEY`), `FACE_MATCH_THRESHOLD`/`FACE_MIN_QUALITY`/
+`FACE_EVENT_COOLDOWN` (seed a new tenant's `FaceRecognitionSettings` row on first use —
+the tenant's own admin-configured values in Settings take over after that; only
+`FACE_EVENT_COOLDOWN`/`FACE_MIN_QUALITY` are still read live by ai-engine, see
+limitation 13), `FACE_PATH` (`/data/faces`, enrolled-photo storage).
 
 ## Coding standards
 
@@ -146,6 +195,12 @@ ai-engine), `AI_DEVICE` (cpu — GPU is an optional future path, never required)
   limitations" before scaling to multiple backend replicas).
 - SQL injection: 100% SQLAlchemy ORM/parameterized queries — the retention worker's raw
   SQL uses `text()` with bound parameters, not string interpolation.
+- Face embeddings: Fernet-encrypted at rest (`face_profiles.embedding_encrypted`) with
+  a key separate from camera-credential encryption; never returned by any list/detail
+  API response (`schemas/person.py::FaceProfileResponse` omits it entirely). Biometric
+  enrollment/management requires the dedicated `manage_biometrics` permission
+  (admin/super-admin only); viewing recognition events requires `view_biometric_events`
+  (also granted to operators, for the human-review workflow).
 
 ## Known limitations (real, documented — not silently faked)
 
@@ -174,7 +229,9 @@ ai-engine), `AI_DEVICE` (cpu — GPU is an optional future path, never required)
    summary" reflects each camera's *current* status, not a historical uptime
    percentage — there's no periodic status-history table yet, only point-in-time
    heartbeats.
-7. **Facial recognition / ANPR**: intentionally not implemented (by design, per spec).
+7. **Facial recognition**: implemented (see the Architecture section above and
+   limitations 12/13 below) — **ANPR/license-plate recognition is not** (out of scope
+   for this pass).
 8. **Push notification delivery** was verified up to the point of a real HTTP call to
    Expo's push API with a correctly-shaped payload (mocked in tests, since there's no
    real device/token in this environment to receive an actual push) — see
@@ -201,6 +258,38 @@ ai-engine), `AI_DEVICE` (cpu — GPU is an optional future path, never required)
    use the same TLS path the web dashboard does. This is a real, unresolved gap, not a
    workaround to remove later — it stays until a CA-trusted cert (`scripts/setup-letsencrypt.sh`,
    needs a real domain) is in place, at which point port 8000 should be closed again.
+12. **Facial Recognition, Phase 1 scope** (deliberately phased — see the Phase 2
+   backlog items below, not silently dropped): the LBP-histogram
+   matcher is a real, classic algorithm but has genuinely lower discriminative accuracy
+   than a modern CNN face embedding — expect more false positives/negatives at the
+   default 85% threshold than a commercial system, especially across lighting/angle
+   variation; tune `face_recognition_threshold` per camera if needed. Liveness/anti-
+   spoofing is **not implemented** (real spoof detection needs a depth/IR sensor a lab
+   webcam pipeline doesn't have — the `liveness_detection_enabled` setting exists in
+   the schema for Phase 2 but currently does nothing). No automated retention/deletion
+   background job yet for `face_recognition_events`/snapshots (the `FaceRecognitionSettings`
+   retention-day fields are stored and configurable but not yet enforced — manual
+   deletion via the Enrolled People page works today). No PDF/CSV/Excel reports for
+   face data yet (the existing `reports.py`/reportlab pattern is the intended
+   follow-up). Person-to-camera/zone authorization is by **category/status**
+   (`person_category`/`person_status` rule conditions), not a fine-grained per-person-
+   per-camera ACL — the spec's own schema didn't define one either. No written AWS
+   deployment guide yet.
+13. **Per-tenant face settings partially synced to ai-engine**: `POST /api/faces/recognize`
+   reads a tenant's `FaceRecognitionSettings.default_match_threshold` live (admin
+   changes to the match threshold in Settings take effect on the very next
+   recognition), but `recognition_cooldown_seconds`/`multi_frame_confirmation_enabled`
+   are **not** — ai-engine's `FaceRecognizer` reads its own static `FACE_EVENT_COOLDOWN`
+   env var instead, the same way zones/tripwires are periodically re-fetched but this
+   particular setting isn't (yet). Wiring this up would mean ai-engine periodically
+   fetching `FaceRecognitionSettings` per tenant, similar to its existing zone/tripwire
+   discovery poll in `app/main.py`.
+14. **Sidebar navigation is flat, not nested**: the four new Face pages are added as
+   flat sibling nav items (matching every other item in `Sidebar.tsx`, which has no
+   nested-submenu support anywhere) rather than the nested "Facial Recognition ▸
+   Dashboard/Enrolled People/..." tree sketched in the original spec — introducing
+   nested-menu UI infrastructure used nowhere else in the app was judged out of scope
+   for "don't redesign the existing application."
 
 ## Current implementation status
 
@@ -215,6 +304,7 @@ ai-engine), `AI_DEVICE` (cpu — GPU is an optional future path, never required)
 | 7. Mobile | Login, camera list, live view, alerts, recording playback, push notifications, and an in-app notification feed are done |
 | 8. Multi-tenancy | Data model + isolation enforced and tested; no tenant self-signup UI |
 | 9. Production hardening (real TLS, Redis rate limit, perf) | Redis-backed rate limiting done; real-TLS automation done (`scripts/setup-letsencrypt.sh`, needs the user's own domain to run) |
+| 10. Facial Recognition & Identity Analytics | Phase 1 done, tested, verified in a real browser — enroll/manage people, real detect→embed→match pipeline, recognition events feeding the existing event/alert/rule/notification/WebSocket pipeline, camera + zone config, human review. Reports, retention jobs, liveness, and full rules-builder UI are Phase 2 (see limitation 12) |
 
 ## Verified end-to-end (not just "should work")
 
@@ -281,3 +371,19 @@ ai-engine), `AI_DEVICE` (cpu — GPU is an optional future path, never required)
   the real timeout path. Fixed with a circuit breaker (skip Redis entirely for 10s
   after one failure); re-measured: first request ~2.1s, every request after that
   8-10ms. Covered by `tests/test_rate_limit.py::test_does_not_retry_redis_on_every_call_during_cooldown`.
+- Facial Recognition, end-to-end in a real browser against a real (unmocked) backend:
+  submitted a real multipart upload through the actual `/faces/enroll` UI with a
+  synthetic (non-face) test image — the real, un-mocked OpenCV Haar cascade correctly
+  found no face and the API returned "No face detected in image", which the frontend
+  rendered cleanly with no crash. Created a real camera with `face_recognition_enabled`
+  and a recognition threshold/operating-hours window through the Cameras page and
+  confirmed the new "Face Rec." column reflected it. Confirmed the two new
+  `FACE_DETECTION`/`FACE_EXCLUSION` zone-type options render correctly in the existing
+  `/zones` polygon editor. Also ran the real (not the auto-generated `create_all`)
+  Alembic migration against a fresh SQLite dev DB — `alembic upgrade head` applied both
+  the initial schema and the face-recognition migration cleanly in sequence, and
+  `scripts.bootstrap` correctly seeded the two new permissions
+  (`manage_biometrics`/`view_biometric_events`) into the ADMIN/SUPER_ADMIN roles.
+  Separately, unit-level tests confirmed the real LBP algorithm itself: identical
+  images produce confidence 1.0, a perturbed image produces meaningfully lower
+  confidence, and the base64 embedding serialization round-trips exactly.

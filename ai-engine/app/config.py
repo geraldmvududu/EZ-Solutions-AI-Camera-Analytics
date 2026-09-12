@@ -29,6 +29,12 @@ class Settings(BaseSettings):
     # the default threshold applies if the zone doesn't specify its own.
     default_loitering_seconds: int = 30
 
+    # Facial Recognition & Identity Analytics (section 21) — field names match the
+    # shared FACE_* env vars (see .env.example) so one value drives both this service
+    # and the backend's identical settings, read from the same env_file.
+    face_event_cooldown: int = 30
+    face_min_quality: float = 0.70
+
 
 @lru_cache
 def get_settings() -> Settings:

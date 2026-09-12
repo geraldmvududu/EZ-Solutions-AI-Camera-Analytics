@@ -127,3 +127,32 @@ def login(client, email, password="Password123!"):
 
 def auth_headers(token: str) -> dict:
     return {"Authorization": f"Bearer {token}"}
+
+
+@pytest.fixture
+def one_face(monkeypatch):
+    """Shared across all face-recognition tests: Haar detection is monkeypatched to a
+    fixed bounding box (synthetic test images don't reliably trigger real Haar
+    detection — that's not what these tests verify), and compute_embedding is
+    monkeypatched to a deterministic, well-separated one-hot-per-cell vector derived
+    from the image's own pixel content, so "same image -> same embedding" and
+    "different image -> clearly different embedding" hold reliably for test fixtures,
+    independent of the real LBP algorithm's actual (documented, modest) discriminative
+    power against synthetic imagery. The real algorithm is exercised directly, without
+    mocking, in test_face_embedding.py."""
+    import numpy as np
+
+    from app.services import face_embedding
+
+    face = face_embedding.DetectedFace(40, 30, 100, 100)
+    monkeypatch.setattr(face_embedding, "detect_faces", lambda frame: [face])
+
+    def fake_embedding(frame, face):
+        bin_index = int(np.sum(frame[:10, :10, 0])) % face_embedding.BINS_PER_CELL
+        vec = np.zeros(face_embedding.EMBEDDING_DIM, dtype=np.float32)
+        for cell in range(face_embedding.GRID_SIZE**2):
+            vec[cell * face_embedding.BINS_PER_CELL + bin_index] = 1.0
+        return vec
+
+    monkeypatch.setattr(face_embedding, "compute_embedding", fake_embedding)
+    return face

@@ -8,6 +8,7 @@ from app.api.routes import (
     cameras,
     detections,
     events,
+    faces,
     incidents,
     notifications,
     push_tokens,
@@ -31,6 +32,7 @@ api_router.include_router(alerts.router)
 api_router.include_router(recordings.router)
 api_router.include_router(snapshots.router)
 api_router.include_router(detections.router)
+api_router.include_router(faces.router)
 api_router.include_router(rules.router)
 api_router.include_router(zones.router)
 api_router.include_router(tripwires.router)

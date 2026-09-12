@@ -12,6 +12,8 @@ class ZoneType(str, enum.Enum):
     INTRUSION = "INTRUSION"
     PRIVACY = "PRIVACY"
     LOITERING = "LOITERING"
+    FACE_DETECTION = "FACE_DETECTION"
+    FACE_EXCLUSION = "FACE_EXCLUSION"
 
 
 class Zone(Base, UUIDPKMixin, TimestampMixin, TenantScopedMixin):

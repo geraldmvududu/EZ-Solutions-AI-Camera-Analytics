@@ -167,16 +167,24 @@ export function ZonesEditorPage() {
               ))}
 
               {/* Existing saved zones/tripwires, shown for reference */}
-              {zones.map((z) => (
-                <polygon
-                  key={z.id}
-                  points={z.polygon.map(([x, y]) => `${x * 100},${y * 100}`).join(" ")}
-                  fill={z.zone_type === "PRIVACY" ? "rgba(148,163,184,0.2)" : "rgba(239,68,68,0.15)"}
-                  stroke={z.zone_type === "PRIVACY" ? "#94a3b8" : "#ef4444"}
-                  strokeWidth="0.3"
-                  strokeDasharray="1,1"
-                />
-              ))}
+              {zones.map((z) => {
+                const colors: Record<string, string> = {
+                  PRIVACY: "#94a3b8",
+                  FACE_DETECTION: "#3b82f6",
+                  FACE_EXCLUSION: "#64748b",
+                };
+                const stroke = colors[z.zone_type] || "#ef4444";
+                return (
+                  <polygon
+                    key={z.id}
+                    points={z.polygon.map(([x, y]) => `${x * 100},${y * 100}`).join(" ")}
+                    fill={`${stroke}33`}
+                    stroke={stroke}
+                    strokeWidth="0.3"
+                    strokeDasharray="1,1"
+                  />
+                );
+              })}
               {tripwires.map((t) => (
                 <line
                   key={t.id}
@@ -223,6 +231,8 @@ export function ZonesEditorPage() {
                   <option value="INTRUSION">Intrusion</option>
                   <option value="PRIVACY">Privacy (blurs this region)</option>
                   <option value="LOITERING">Loitering</option>
+                  <option value="FACE_DETECTION">Face Detection Zone (recognize only here)</option>
+                  <option value="FACE_EXCLUSION">Face Exclusion Zone (never recognize here)</option>
                 </select>
               </>
             ) : (
