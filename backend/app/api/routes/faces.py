@@ -49,6 +49,16 @@ settings = get_settings()
 _DUPLICATE_MATCH_THRESHOLD = 0.92
 _FACE_EVENT_TYPES = (EventType.FACE_RECOGNIZED, EventType.UNKNOWN_FACE_DETECTED)
 
+# Multi-frame confirmation (section 4/13, FaceRecognitionSettings.multi_frame_
+# confirmation_enabled): recognition attempts are already cooldown-spaced (~30s apart
+# by default — see ai-engine's FaceRecognizer), so this is attempt-level confirmation
+# across consecutive recognition ATTEMPTS for the same track, not true same-second
+# multi-frame voting within one video clip. A single in-process dict is an accepted
+# limitation for a single-backend-replica lab deployment — same caveat already
+# documented for the in-memory rate-limit fallback (app/core/rate_limit.py).
+_pending_confirmations: dict[tuple[str, int], tuple[uuid.UUID, datetime]] = {}
+_MULTI_FRAME_CONFIRMATION_WINDOW_SECONDS = 120
+
 
 def _client_ip(request: Request) -> str:
     return request.client.host if request.client else ""
@@ -307,8 +317,23 @@ async def recognize_face(payload: FaceRecognizeRequest, db: Session = Depends(ge
         # facial recognition globally or for individual cameras" (section 14).
         return FaceRecognizeResult(
             recognition_status=recognition_status, person_id=None, person_name=None,
-            confidence_score=0.0, event_id=uuid.uuid4(),
+            confidence_score=0.0, event_id=None,
         )
+
+    if recognition_status == RecognitionStatus.RECOGNIZED and fr_settings.multi_frame_confirmation_enabled:
+        key = (str(payload.camera_id), payload.tracking_id)
+        pending = _pending_confirmations.get(key)
+        now = datetime.now(timezone.utc)
+        if pending and pending[0] == best_person.id and (now - pending[1]).total_seconds() <= _MULTI_FRAME_CONFIRMATION_WINDOW_SECONDS:
+            _pending_confirmations.pop(key, None)  # two consecutive attempts agree — proceed below
+        else:
+            _pending_confirmations[key] = (best_person.id, now)
+            return FaceRecognizeResult(
+                recognition_status="PENDING_CONFIRMATION",
+                person_id=best_person.id,
+                person_name=f"{best_person.first_name} {best_person.last_name}",
+                confidence_score=best_confidence, event_id=None,
+            )
 
     # Maximum recognition events per person/camera (section 4) — an hourly cap so a
     # continuously-visible person/unknown face can't flood the event feed.
@@ -324,7 +349,7 @@ async def recognize_face(payload: FaceRecognizeRequest, db: Session = Depends(ge
             recognition_status=recognition_status,
             person_id=best_person.id if best_person else None,
             person_name=f"{best_person.first_name} {best_person.last_name}" if best_person else None,
-            confidence_score=best_confidence, event_id=uuid.uuid4(),
+            confidence_score=best_confidence, event_id=None,
         )
 
     event_type = EventType.FACE_RECOGNIZED if recognition_status == RecognitionStatus.RECOGNIZED else EventType.UNKNOWN_FACE_DETECTED
@@ -337,6 +362,7 @@ async def recognize_face(payload: FaceRecognizeRequest, db: Session = Depends(ge
         severity=severity,
         description="Face recognized" if best_person else "Unknown person detected",
         snapshot_id=payload.snapshot_id,
+        recording_id=payload.recording_id,
         occurred_at=payload.occurred_at,
         event_metadata={
             "person_category": best_person.category.value if best_person else None,
@@ -362,6 +388,7 @@ async def recognize_face(payload: FaceRecognizeRequest, db: Session = Depends(ge
         model_version=payload.model_version,
         event_timestamp=payload.occurred_at,
         snapshot_id=payload.snapshot_id,
+        recording_id=payload.recording_id,
     )
     db.add(face_event)
     db.commit()

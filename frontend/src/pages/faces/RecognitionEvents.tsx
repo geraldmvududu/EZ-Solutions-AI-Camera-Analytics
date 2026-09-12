@@ -1,6 +1,8 @@
 import { useEffect, useState } from "react";
 import { Layout } from "../../components/layout/Layout";
 import * as facesApi from "../../api/faces";
+import { getRecording } from "../../api/misc";
+import { VideoPlayerModal } from "../Recordings";
 import type { FaceRecognitionEventItem, RecognitionStatus } from "../../types";
 
 const STATUS_LABEL: Record<RecognitionStatus, string> = {
@@ -72,6 +74,18 @@ export function RecognitionEventsPage() {
   const [statusFilter, setStatusFilter] = useState<string>("");
   const [reviewing, setReviewing] = useState<FaceRecognitionEventItem | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [playback, setPlayback] = useState<{ recordingId: string; seekSeconds: number } | null>(null);
+
+  async function handleViewRecording(e: FaceRecognitionEventItem) {
+    if (!e.recording_id) return;
+    try {
+      const recording = await getRecording(e.recording_id);
+      const seekSeconds = (new Date(e.event_timestamp).getTime() - new Date(recording.started_at).getTime()) / 1000;
+      setPlayback({ recordingId: e.recording_id, seekSeconds: Math.max(0, seekSeconds) });
+    } catch {
+      setError("Could not load the linked recording");
+    }
+  }
 
   async function load() {
     try {
@@ -118,9 +132,16 @@ export function RecognitionEventsPage() {
                 <td className="px-4 py-2 text-slate-400">{(e.confidence_score * 100).toFixed(1)}%</td>
                 <td className="px-4 py-2 text-slate-400">{e.reviewed ? `Yes (${e.review_decision})` : "No"}</td>
                 <td className="px-4 py-2">
-                  <button onClick={() => setReviewing(e)} className="text-accent-500 hover:underline text-xs">
-                    Review
-                  </button>
+                  <div className="flex items-center gap-3">
+                    <button onClick={() => setReviewing(e)} className="text-accent-500 hover:underline text-xs">
+                      Review
+                    </button>
+                    {e.recording_id && (
+                      <button onClick={() => handleViewRecording(e)} className="text-accent-500 hover:underline text-xs">
+                        View in recording
+                      </button>
+                    )}
+                  </div>
                 </td>
               </tr>
             ))}
@@ -136,6 +157,9 @@ export function RecognitionEventsPage() {
       </div>
 
       {reviewing && <ReviewModal event={reviewing} onClose={() => setReviewing(null)} onReviewed={load} />}
+      {playback && (
+        <VideoPlayerModal recordingId={playback.recordingId} seekSeconds={playback.seekSeconds} onClose={() => setPlayback(null)} />
+      )}
     </Layout>
   );
 }

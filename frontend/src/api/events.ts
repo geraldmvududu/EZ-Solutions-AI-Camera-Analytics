@@ -6,6 +6,8 @@ export const listEvents = (params: Record<string, string> = {}) => {
   return apiRequest<EventItem[]>(`/api/events${qs ? `?${qs}` : ""}`);
 };
 
+export const getEvent = (id: string) => apiRequest<EventItem>(`/api/events/${id}`);
+
 export const listAlerts = (params: Record<string, string> = {}) => {
   const qs = new URLSearchParams(params).toString();
   return apiRequest<AlertItem[]>(`/api/alerts${qs ? `?${qs}` : ""}`);

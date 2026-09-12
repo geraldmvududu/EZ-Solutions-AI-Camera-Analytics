@@ -16,6 +16,7 @@ from sqlalchemy.orm import Session
 
 from app.models.alert import Alert
 from app.models.event import Event
+from app.models.face_recognition_event import FaceRecognitionEvent
 from app.schemas.analytics import AnalyticsSummary
 
 
@@ -38,6 +39,22 @@ def alerts_to_csv(alerts: list[Alert]) -> str:
             a.created_at.isoformat(),
             a.acknowledged_at.isoformat() if a.acknowledged_at else "",
             a.resolved_at.isoformat() if a.resolved_at else "",
+        ])
+    return buffer.getvalue()
+
+
+def face_appearances_to_csv(appearances: list[FaceRecognitionEvent]) -> str:
+    """A person's real appearance history (section 6/23) — one row per actual
+    recognition attempt against them, including which recording (if any) captured it,
+    so the CSV itself is enough to locate the evidence, not just a text log."""
+    buffer = io.StringIO()
+    writer = csv.writer(buffer)
+    writer.writerow(["Event ID", "Camera ID", "Status", "Confidence", "Timestamp", "Recording ID", "Snapshot ID", "Reviewed", "Review Decision"])
+    for a in appearances:
+        writer.writerow([
+            str(a.id), str(a.camera_id), a.recognition_status.value, f"{a.confidence_score:.2f}",
+            a.event_timestamp.isoformat(), str(a.recording_id) if a.recording_id else "",
+            str(a.snapshot_id) if a.snapshot_id else "", a.reviewed, a.review_decision,
         ])
     return buffer.getvalue()
 

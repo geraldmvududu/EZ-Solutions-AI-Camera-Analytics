@@ -1,7 +1,9 @@
 import { useEffect, useState } from "react";
 import { Layout } from "../../components/layout/Layout";
 import * as facesApi from "../../api/faces";
-import type { PersonItem, PersonStatus } from "../../types";
+import { getRecording } from "../../api/misc";
+import { VideoPlayerModal } from "../Recordings";
+import type { FaceRecognitionEventItem, PersonItem, PersonStatus } from "../../types";
 
 function PersonPhoto({ personId }: { personId: string }) {
   const [url, setUrl] = useState<string | null>(null);
@@ -27,10 +29,96 @@ function PersonPhoto({ personId }: { personId: string }) {
   );
 }
 
+function AppearancesModal({ person, onClose }: { person: PersonItem; onClose: () => void }) {
+  const [events, setEvents] = useState<FaceRecognitionEventItem[]>([]);
+  const [error, setError] = useState<string | null>(null);
+  const [playback, setPlayback] = useState<{ recordingId: string; seekSeconds: number } | null>(null);
+
+  useEffect(() => {
+    facesApi.listFaceEvents({ person_id: person.id }).then(setEvents).catch(() => setError("Failed to load appearance history"));
+  }, [person.id]);
+
+  async function handleViewRecording(e: FaceRecognitionEventItem) {
+    if (!e.recording_id) return;
+    try {
+      const recording = await getRecording(e.recording_id);
+      const seekSeconds = (new Date(e.event_timestamp).getTime() - new Date(recording.started_at).getTime()) / 1000;
+      setPlayback({ recordingId: e.recording_id, seekSeconds: Math.max(0, seekSeconds) });
+    } catch {
+      setError("Could not load the linked recording");
+    }
+  }
+
+  return (
+    <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4">
+      <div className="bg-base-900 border border-base-700 rounded-lg w-full max-w-2xl p-5 space-y-4 max-h-[85vh] overflow-y-auto">
+        <div className="flex items-center justify-between">
+          <h3 className="font-semibold text-slate-100">{person.first_name} {person.last_name} — Appearances</h3>
+          <button
+            onClick={() => facesApi.downloadFaceAppearancesCsv(person.id, `${person.first_name}-${person.last_name}`)}
+            className="px-3 py-1.5 text-xs rounded border border-base-600 text-slate-300 hover:text-slate-100"
+          >
+            Export CSV
+          </button>
+        </div>
+
+        {error && <div className="text-severity-critical text-sm">{error}</div>}
+
+        <div className="rounded border border-base-700 overflow-hidden">
+          <table className="w-full text-sm">
+            <thead className="bg-base-800 text-slate-400 text-xs uppercase">
+              <tr>
+                <th className="text-left px-3 py-2">Time</th>
+                <th className="text-left px-3 py-2">Status</th>
+                <th className="text-left px-3 py-2">Confidence</th>
+                <th className="text-left px-3 py-2">Actions</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-base-700">
+              {events.map((e) => (
+                <tr key={e.id}>
+                  <td className="px-3 py-2 text-slate-400 text-xs">{new Date(e.event_timestamp).toLocaleString()}</td>
+                  <td className="px-3 py-2 text-slate-200">{e.recognition_status.replace(/_/g, " ")}</td>
+                  <td className="px-3 py-2 text-slate-400">{(e.confidence_score * 100).toFixed(1)}%</td>
+                  <td className="px-3 py-2">
+                    {e.recording_id && (
+                      <button onClick={() => handleViewRecording(e)} className="text-accent-500 hover:underline text-xs">
+                        View in recording
+                      </button>
+                    )}
+                  </td>
+                </tr>
+              ))}
+              {events.length === 0 && (
+                <tr>
+                  <td colSpan={4} className="px-3 py-6 text-center text-slate-500">
+                    No recognition events for this person yet.
+                  </td>
+                </tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+
+        <div className="flex justify-end">
+          <button onClick={onClose} className="px-3 py-1.5 text-sm rounded border border-base-600 text-slate-300">
+            Close
+          </button>
+        </div>
+      </div>
+
+      {playback && (
+        <VideoPlayerModal recordingId={playback.recordingId} seekSeconds={playback.seekSeconds} onClose={() => setPlayback(null)} />
+      )}
+    </div>
+  );
+}
+
 export function EnrolledPeoplePage() {
   const [people, setPeople] = useState<PersonItem[]>([]);
   const [q, setQ] = useState("");
   const [error, setError] = useState<string | null>(null);
+  const [viewingAppearances, setViewingAppearances] = useState<PersonItem | null>(null);
 
   async function load(query?: string) {
     try {
@@ -112,11 +200,16 @@ export function EnrolledPeoplePage() {
                   {p.face_profiles[0] ? new Date(p.face_profiles[0].enrollment_date).toLocaleDateString() : "—"}
                 </td>
                 <td className="px-4 py-2">
-                  {p.status !== "DELETED" && (
-                    <button onClick={() => handleDelete(p)} className="text-severity-critical hover:underline text-xs">
-                      Delete
+                  <div className="flex items-center gap-3">
+                    <button onClick={() => setViewingAppearances(p)} className="text-accent-500 hover:underline text-xs">
+                      Appearances
                     </button>
-                  )}
+                    {p.status !== "DELETED" && (
+                      <button onClick={() => handleDelete(p)} className="text-severity-critical hover:underline text-xs">
+                        Delete
+                      </button>
+                    )}
+                  </div>
                 </td>
               </tr>
             ))}
@@ -130,6 +223,8 @@ export function EnrolledPeoplePage() {
           </tbody>
         </table>
       </div>
+
+      {viewingAppearances && <AppearancesModal person={viewingAppearances} onClose={() => setViewingAppearances(null)} />}
     </Layout>
   );
 }

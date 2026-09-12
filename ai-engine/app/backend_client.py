@@ -67,7 +67,17 @@ class BackendClient:
         return self._safe_post("/api/snapshots", payload)
 
     def create_recording(self, payload: dict) -> dict | None:
+        """Called when a segment STARTS (SegmentRecorder.start()) — see
+        finalize_recording for why this is create-at-start, not create-at-stop."""
         return self._safe_post("/api/recordings", payload)
+
+    def finalize_recording(self, recording_id: str, payload: dict) -> dict | None:
+        """Called when a segment closes (SegmentRecorder.stop()) to fill in what
+        wasn't knowable at start time (ended_at/duration/file_size). Recording rows
+        are created at start time specifically so a real recording_id already exists
+        to attach to a face-recognition/violation event that fires while the segment
+        is still being written."""
+        return self._safe_patch(f"/api/recordings/{recording_id}/internal", payload)
 
     def recognize_face(self, payload: dict) -> dict | None:
         """Sends a live candidate face embedding for server-side matching (Facial
@@ -83,6 +93,15 @@ class BackendClient:
             return resp.json() if resp.content else None
         except httpx.HTTPError as exc:
             logger.warning("POST %s failed: %s", path, exc)
+            return None
+
+    def _safe_patch(self, path: str, payload: dict) -> dict | None:
+        try:
+            resp = self._client.patch(path, json=payload)
+            resp.raise_for_status()
+            return resp.json() if resp.content else None
+        except httpx.HTTPError as exc:
+            logger.warning("PATCH %s failed: %s", path, exc)
             return None
 
 

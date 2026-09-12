@@ -11,6 +11,9 @@ import time
 from datetime import datetime, timezone
 from datetime import time as dt_time
 
+import cv2
+import numpy as np
+
 from app.backend_client import backend_client
 from app.config import get_settings
 from app.core import face_embedding
@@ -20,6 +23,19 @@ from app.detectors.base import Detection
 
 logger = logging.getLogger("ai-engine.face_recognizer")
 settings = get_settings()
+
+# Liveness (section 13/22, camera["liveness_detection_enabled"] — a tenant setting
+# flattened onto the camera dict by GET /cameras/internal/active): a real, but
+# deliberately narrow, anti-static-photo check. Downsamples the current face crop and
+# compares it to the PREVIOUS recognition attempt's crop for the same track; a nearly
+# pixel-identical pair means the camera is looking at a static printed photo or a
+# paused video frame held up to it, not a live face (real camera sensor noise alone
+# guarantees some difference between two genuinely live captures). This explicitly
+# does NOT defend against a moving photo, a played video, or a printed photo held with
+# natural hand tremor — real biometric liveness needs IR/depth hardware this lab
+# doesn't have. Documented as this exact narrow scope, not oversold.
+_LIVENESS_DOWNSAMPLE_SIZE = 32
+_LIVENESS_MIN_FRAME_DIFF = 0.5
 
 
 def _within_operating_hours(camera: dict, now: dt_time | None = None) -> bool:
@@ -52,6 +68,22 @@ class FaceRecognizer:
         self.camera_id = camera_id
         self._last_attempt: dict[int, float] = {}
         self._known_identities: dict[int, tuple[float, dict]] = {}
+        self._last_crop_downsampled: dict[int, np.ndarray] = {}
+
+    def _passes_liveness_check(self, track_id: int, crop) -> bool:
+        gray = cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY) if crop.ndim == 3 else crop
+        small = cv2.resize(gray, (_LIVENESS_DOWNSAMPLE_SIZE, _LIVENESS_DOWNSAMPLE_SIZE)).astype(np.float32)
+
+        previous = self._last_crop_downsampled.get(track_id)
+        self._last_crop_downsampled[track_id] = small
+        if previous is None:
+            return True  # nothing to compare against yet — fail open on the first attempt
+
+        mean_diff = float(np.mean(np.abs(small - previous)))
+        if mean_diff < _LIVENESS_MIN_FRAME_DIFF:
+            logger.info("Camera %s: track %s failed liveness check (frame diff %.3f) — likely a static photo", self.camera_id, track_id, mean_diff)
+            return False
+        return True
 
     def identity_for(self, track_id: int) -> dict | None:
         """Returns the most recent RECOGNIZED result for this track_id
@@ -68,15 +100,19 @@ class FaceRecognizer:
             return None
         return identity
 
-    def maybe_recognize(self, camera: dict, frame, track_id: int, detection: Detection, centroid, face_zones: list[dict]) -> None:
+    def maybe_recognize(
+        self, camera: dict, frame, track_id: int, detection: Detection, centroid, face_zones: list[dict], recording_id: str | None = None
+    ) -> None:
         try:
-            self._maybe_recognize(camera, frame, track_id, detection, centroid, face_zones)
+            self._maybe_recognize(camera, frame, track_id, detection, centroid, face_zones, recording_id)
         except Exception:
             # Never let a recognition bug take down the worker's capture loop — real
             # motion/AI/recording must keep running even if this stage misbehaves.
             logger.exception("Camera %s: face recognition failed for track %s", self.camera_id, track_id)
 
-    def _maybe_recognize(self, camera: dict, frame, track_id: int, detection: Detection, centroid, face_zones: list[dict]) -> None:
+    def _maybe_recognize(
+        self, camera: dict, frame, track_id: int, detection: Detection, centroid, face_zones: list[dict], recording_id: str | None
+    ) -> None:
         cooldown = settings.face_event_cooldown
         now = time.time()
         if now - self._last_attempt.get(track_id, 0.0) < cooldown:
@@ -106,6 +142,9 @@ class FaceRecognizer:
         if not quality.passed:
             return
 
+        if camera.get("liveness_detection_enabled") and not self._passes_liveness_check(track_id, crop):
+            return
+
         vector = face_embedding.compute_embedding(crop, quality.face)
         self._last_attempt[track_id] = now
 
@@ -133,6 +172,7 @@ class FaceRecognizer:
                 "model_version": face_embedding.FACE_MODEL_VERSION,
                 "quality_score": quality.quality_score,
                 "snapshot_id": snapshot_id,
+                "recording_id": recording_id,
                 "occurred_at": datetime.now(timezone.utc).isoformat(),
             }
         )

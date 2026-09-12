@@ -93,3 +93,12 @@ class CameraResponse(BaseModel):
     # response — camera credentials must never be exposed to the frontend (section 14).
 
     model_config = {"from_attributes": True}
+
+
+class CameraInternalResponse(CameraResponse):
+    """Used only by GET /cameras/internal/active (ai-engine's discovery poll).
+    liveness_detection_enabled is a tenant-level FaceRecognitionSettings field, not a
+    camera column — flattened on here rather than added to CameraResponse itself,
+    since it's meaningless on the regular user-facing camera list/detail responses."""
+
+    liveness_detection_enabled: bool = False

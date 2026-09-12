@@ -1,3 +1,5 @@
+import time
+
 import fakeredis
 import redis
 import pytest
@@ -92,9 +94,18 @@ def test_internal_service_calls_are_exempt_from_rate_limiting(client):
         assert resp.status_code == 200
 
 
-def test_regular_authenticated_requests_are_still_rate_limited(client, admin_user):
+def test_regular_authenticated_requests_are_still_rate_limited(client, admin_user, monkeypatch):
     """Regression guard for the exemption above: it must not accidentally exempt
-    everything — a normal (non-internal-token) client is still subject to the limit."""
+    everything — a normal (non-internal-token) client is still subject to the limit.
+
+    Freezes time.time() for the duration of the loop: the fixed-window limiter keys
+    on int(time.time() // WINDOW_SECONDS), so without this, a slow test run that
+    happens to straddle a real minute boundary crosses into a fresh window partway
+    through and the count never reaches the threshold — a real, if rare, flake
+    (observed once in the full suite; this exact test passed in isolation)."""
+    frozen_time = time.time()
+    monkeypatch.setattr(time, "time", lambda: frozen_time)
+
     token = login(client, admin_user.email)
     last_status = None
     for _ in range(rate_limit.MAX_REQUESTS_PER_WINDOW + 5):

@@ -27,7 +27,7 @@ from app.models.snapshot import Snapshot
 from app.models.tripwire import Tripwire
 from app.models.user import User
 from app.models.zone import Zone
-from app.schemas.camera import CameraCreate, CameraResponse, CameraUpdate
+from app.schemas.camera import CameraCreate, CameraInternalResponse, CameraResponse, CameraUpdate
 
 router = APIRouter(prefix="/cameras", tags=["cameras"])
 settings = get_settings()
@@ -46,12 +46,25 @@ def _next_camera_code(db: Session, tenant_id: uuid.UUID) -> str:
     return f"CAM-{count + 1:03d}"
 
 
-@router.get("/internal/active", response_model=list[CameraResponse], include_in_schema=False, dependencies=[Depends(require_internal_service)])
-def list_active_cameras_internal(db: Session = Depends(get_db)) -> list[Camera]:
+@router.get("/internal/active", response_model=list[CameraInternalResponse], include_in_schema=False, dependencies=[Depends(require_internal_service)])
+def list_active_cameras_internal(db: Session = Depends(get_db)) -> list[CameraInternalResponse]:
     """Used by the ai-engine to discover which cameras it should be capturing/processing
     across ALL tenants — this is a trusted server-to-server call, not a user request, so
-    it deliberately bypasses tenant scoping."""
-    return db.query(Camera).filter(Camera.is_active.is_(True)).all()
+    it deliberately bypasses tenant scoping. Also flattens each camera's tenant's
+    liveness_detection_enabled setting on, since ai-engine's FaceRecognizer needs it
+    but has no other way to read a tenant-level (not camera-level) setting."""
+    from app.api.routes.faces import _get_or_create_settings
+
+    cameras = db.query(Camera).filter(Camera.is_active.is_(True)).all()
+    liveness_by_tenant: dict[uuid.UUID, bool] = {}
+    results: list[CameraInternalResponse] = []
+    for camera in cameras:
+        if camera.tenant_id not in liveness_by_tenant:
+            liveness_by_tenant[camera.tenant_id] = _get_or_create_settings(db, camera.tenant_id).liveness_detection_enabled
+        response = CameraInternalResponse.model_validate(camera)
+        response.liveness_detection_enabled = liveness_by_tenant[camera.tenant_id]
+        results.append(response)
+    return results
 
 
 @router.get("", response_model=list[CameraResponse])

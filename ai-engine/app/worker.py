@@ -188,7 +188,9 @@ class CameraWorker:
             self._check_zones(track_id, centroid, frame, detection_id)
 
             if self._face_recognizer and detection.object_type == "PERSON":
-                self._face_recognizer.maybe_recognize(self.camera, frame, track_id, detection, centroid, self._face_zones)
+                self._face_recognizer.maybe_recognize(
+                    self.camera, frame, track_id, detection, centroid, self._face_zones, self._recorder.recording_id
+                )
 
     def _emit_object_event(self, frame, detection, detection_id) -> None:
         event_type = "PERSON_DETECTED" if detection.object_type == "PERSON" else (
@@ -251,6 +253,7 @@ class CameraWorker:
                     "detection_id": detection_id,
                     "tripwire_id": tripwire["id"],
                     "snapshot_id": snapshot_id,
+                    "recording_id": self._recorder.recording_id,
                     "occurred_at": datetime.now(timezone.utc).isoformat(),
                     "event_metadata": {"direction": direction, "tracking_id": track_id, **self._identity_metadata(track_id)},
                 }
@@ -272,6 +275,7 @@ class CameraWorker:
                         "detection_id": detection_id,
                         "zone_id": zone["id"],
                         "snapshot_id": snapshot_id,
+                        "recording_id": self._recorder.recording_id,
                         "occurred_at": datetime.now(timezone.utc).isoformat(),
                         "event_metadata": {"tracking_id": track_id, **self._identity_metadata(track_id)},
                     }

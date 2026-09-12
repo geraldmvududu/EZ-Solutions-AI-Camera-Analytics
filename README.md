@@ -184,6 +184,26 @@ opens a real **Incident** — the "case file" you can click open and work.
    and that they crossed a boundary) by camera/tracking — not a claim that facial
    recognition itself proves the violation. The generated description says so
    explicitly, and always review the linked evidence before treating it as confirmed.
+6. Click **View in recording** on the linked Alert to watch the actual video, seeked to
+   the moment the violation occurred — recordings, face recognition events, and
+   violations are all linked to the camera's actual video now (see below).
+
+### Watch the recording linked to a face/violation event
+
+Every recording is now identifiable from the moment it starts being written, not just
+after it finishes — so a `FACE_RECOGNIZED`, `UNKNOWN_FACE_DETECTED`, or violation event
+that happens mid-recording carries a real link to it.
+
+1. **Recordings** page: click **Play** on any row for an inline, seekable player (the
+   browser's own video controls — scrub, pause, fullscreen).
+2. **Recognition Events** / **Incidents** (per linked Alert) / **Enrolled People →
+   Appearances**: click **View in recording** to open the same player, pre-seeked to
+   the moment that specific event occurred.
+3. **Enrolled People → Appearances** also has an **Export CSV** button for a person's
+   full recognition history.
+
+If a recording has since been deleted by retention, the "View in recording" action
+fails quietly rather than erroring — there is simply no evidence left to show.
 
 ### 1.11 Logs
 
@@ -234,6 +254,7 @@ Migrations run automatically on backend startup.
 | Face enrollment always says "No face detected in image" | The real OpenCV Haar cascade needs a genuinely photographic, front-facing, well-lit human face — synthetic/cartoon/heavily-cropped images will correctly fail this. Not a bug: `ai-engine/tests`/`backend/tests` cover the algorithm directly with real face images and synthetic patterns respectively |
 | A camera with Facial Recognition enabled never produces `FACE_RECOGNIZED`/`UNKNOWN_FACE_DETECTED` events | Check, in order: the camera's `face_recognition_enabled` is actually ON, no `FACE_EXCLUSION` zone covers the whole frame (or a `FACE_DETECTION` zone exists but doesn't cover where people actually appear), the camera's operating-hours window (if set) covers the current time, and `docker compose logs ai-engine` for real per-frame quality-gate rejections (too small/blurry/dark) |
 | No live dashboard updates | Check `/ws/live` isn't blocked — nginx's `/ws/` location must support `Upgrade`/`Connection` headers (already configured in `nginx/nginx.conf`) |
+| A recording won't play in the browser (blank player, or a codec error in the browser console) | The ai-engine writes recordings in a codec (`mp4v`) that isn't browser-playable, then re-encodes to H.264 via the system `ffmpeg` binary right after the recording finishes. Check `docker compose logs ai-engine` for `ffmpeg transcode failed`/`ffmpeg transcode skipped` — if either appears, the original (non-browser-playable but still valid, VLC/ffplay-usable) file was kept instead. Confirm `ffmpeg` is actually present in the ai-engine container (`docker compose exec ai-engine ffmpeg -version`) |
 
 ## 2. Architecture
 
@@ -293,8 +314,10 @@ python -m app.main
 ## 4. Testing
 
 ```bash
-cd backend && .venv/bin/pytest -q   # 86 tests, including Facial Recognition and the violation-incident correlation
-cd ai-engine && .venv/bin/pytest -q # 36 tests, including FaceRecognizer
+cd backend && .venv/bin/pytest -q   # 100 tests, including Facial Recognition, the
+                                     # violation-incident correlation, and recording linkage
+cd ai-engine && .venv/bin/pytest -q # 48 tests, including FaceRecognizer and SegmentRecorder
+cd worker && .venv/bin/pytest -q    # 6 tests, retention cleanup incl. face data
 cd frontend && npm run build      # type-checks + production build
 cd mobile && npx tsc --noEmit     # type-checks
 ```

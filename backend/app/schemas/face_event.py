@@ -20,15 +20,20 @@ class FaceRecognizeRequest(BaseModel):
     model_version: str
     quality_score: float
     snapshot_id: uuid.UUID | None = None
+    recording_id: uuid.UUID | None = None
     occurred_at: datetime
 
 
 class FaceRecognizeResult(BaseModel):
-    recognition_status: RecognitionStatus
+    # A plain str, not RecognitionStatus, because this can also carry
+    # "PENDING_CONFIRMATION" (section 4/13's multi-frame confirmation — see
+    # app/api/routes/faces.py) which is never written to the DB enum, only ever
+    # returned transiently to ai-engine for logging/cooldown bookkeeping.
+    recognition_status: str
     person_id: uuid.UUID | None
     person_name: str | None
     confidence_score: float
-    event_id: uuid.UUID
+    event_id: uuid.UUID | None = None
 
 
 class FaceRecognitionEventResponse(BaseModel):

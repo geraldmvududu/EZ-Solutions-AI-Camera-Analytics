@@ -2,9 +2,12 @@ import { useEffect, useState, type FormEvent } from "react";
 import { Layout } from "../components/layout/Layout";
 import { SeverityBadge, StatusBadge } from "../components/ui/Badge";
 import * as incidentsApi from "../api/misc";
-import type { Incident } from "../api/misc";
+import { getRecording } from "../api/misc";
+import type { Incident, IncidentAlert } from "../api/misc";
 import * as camerasApi from "../api/cameras";
+import { getEvent } from "../api/events";
 import type { Camera } from "../types";
+import { VideoPlayerModal } from "./Recordings";
 
 function IncidentDetailModal({
   incident,
@@ -20,6 +23,22 @@ function IncidentDetailModal({
   const [status, setStatus] = useState(incident.status);
   const [resolution, setResolution] = useState(incident.resolution);
   const [saving, setSaving] = useState(false);
+  const [playback, setPlayback] = useState<{ recordingId: string; seekSeconds: number } | null>(null);
+
+  async function handleViewRecording(alert: IncidentAlert) {
+    if (!alert.recording_id) return;
+    try {
+      // Seek to the actual moment the violation occurred (the underlying Event's
+      // occurred_at), not the Alert's own created_at — the alert row is inserted a
+      // moment after the event in real-time operation, but they are not the same
+      // field, and only occurred_at is the real timestamp to seek the video to.
+      const [recording, event] = await Promise.all([getRecording(alert.recording_id), getEvent(alert.event_id)]);
+      const seekSeconds = (new Date(event.occurred_at).getTime() - new Date(recording.started_at).getTime()) / 1000;
+      setPlayback({ recordingId: alert.recording_id, seekSeconds: Math.max(0, seekSeconds) });
+    } catch {
+      /* recording may have been deleted by retention — no linked evidence to show */
+    }
+  }
 
   async function handleSave() {
     setSaving(true);
@@ -63,7 +82,12 @@ function IncidentDetailModal({
                   </div>
                   <div className="flex items-center gap-2">
                     <SeverityBadge severity={a.severity} />
-                    {a.snapshot_id && <span className="text-accent-500">Snapshot available</span>}
+                    {a.snapshot_id && <span className="text-slate-500">Snapshot available</span>}
+                    {a.recording_id && (
+                      <button onClick={() => handleViewRecording(a)} className="text-accent-500 hover:underline">
+                        View in recording
+                      </button>
+                    )}
                   </div>
                 </div>
               ))}
@@ -96,6 +120,10 @@ function IncidentDetailModal({
           </button>
         </div>
       </div>
+
+      {playback && (
+        <VideoPlayerModal recordingId={playback.recordingId} seekSeconds={playback.seekSeconds} onClose={() => setPlayback(null)} />
+      )}
     </div>
   );
 }

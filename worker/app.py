@@ -6,6 +6,15 @@ maintenance, not a user or ai-engine action.
 
 Deliberately implemented with plain SQLAlchemy Core (no ORM model duplication) so this
 service doesn't need to stay in lockstep with backend/app/models on every migration.
+
+cleanup_face_recognition_events/cleanup_face_profiles (Facial Recognition Phase 2,
+section 15) follow the same plain-SQL style but compute each tenant's cutoff timestamp
+in Python rather than with Postgres's `now() - interval` — retention here is a
+per-TENANT setting (face_recognition_settings), not per-camera like recordings/
+snapshots, so there's no single column to interpolate into one query across tenants
+anyway. This also makes them portable to SQLite, so — unlike cleanup_recordings/
+cleanup_snapshots above, which have never had automated tests since this service had
+no test suite at all before this — these two are actually covered by tests/test_app.py.
 """
 
 import logging
@@ -75,12 +84,80 @@ def cleanup_snapshots() -> None:
             logger.info("Purged %d expired snapshot(s)", len(rows))
 
 
+def cleanup_face_recognition_events() -> None:
+    """Deletes expired FaceRecognitionEvent rows per-tenant, per
+    face_recognition_settings.event_retention_days — but never one whose underlying
+    Event has an Alert still linked to a non-closed Incident (section 5/15: evidence
+    tied to an open case file must survive its own retention window until the case is
+    actually closed). Does not touch the linked Snapshot/Recording rows/files — those
+    are cleaned up independently by cleanup_snapshots/cleanup_recordings above, per
+    their own camera-level retention_days."""
+    with engine.begin() as conn:
+        tenants = conn.execute(text("SELECT tenant_id, event_retention_days FROM face_recognition_settings")).fetchall()
+        total_deleted = 0
+        for tenant in tenants:
+            cutoff = datetime.now(timezone.utc) - timedelta(days=tenant.event_retention_days)
+            result = conn.execute(
+                text(
+                    """
+                    DELETE FROM face_recognition_events
+                    WHERE tenant_id = :tenant_id
+                      AND event_timestamp < :cutoff
+                      AND NOT EXISTS (
+                          SELECT 1 FROM alerts a
+                          JOIN incident_alerts ia ON ia.alert_id = a.id
+                          JOIN incidents i ON i.id = ia.incident_id
+                          WHERE a.event_id = face_recognition_events.event_id
+                            AND i.status NOT IN ('RESOLVED', 'CLOSED')
+                      )
+                    """
+                ),
+                {"tenant_id": tenant.tenant_id, "cutoff": cutoff},
+            )
+            total_deleted += result.rowcount
+
+        if total_deleted:
+            logger.info("Purged %d expired face recognition event(s)", total_deleted)
+
+
+def cleanup_face_profiles() -> None:
+    """Deletes expired FaceProfile rows (the biometric embedding + enrolled photo)
+    per-tenant, per face_recognition_settings.face_profile_retention_days. The Person
+    record itself is untouched — this is intentional per the original spec's
+    retention table: a person's biometric template expires and must be re-enrolled
+    after the configured period (365 days by default), it isn't a full account
+    deletion."""
+    with engine.begin() as conn:
+        tenants = conn.execute(text("SELECT tenant_id, face_profile_retention_days FROM face_recognition_settings")).fetchall()
+        total_deleted = 0
+        for tenant in tenants:
+            cutoff = datetime.now(timezone.utc) - timedelta(days=tenant.face_profile_retention_days)
+            rows = conn.execute(
+                text("SELECT id, image_reference FROM face_profiles WHERE tenant_id = :tenant_id AND enrollment_date < :cutoff"),
+                {"tenant_id": tenant.tenant_id, "cutoff": cutoff},
+            ).fetchall()
+
+            for row in rows:
+                try:
+                    if row.image_reference and os.path.isfile(row.image_reference):
+                        os.remove(row.image_reference)
+                except OSError as exc:
+                    logger.warning("Could not delete face profile image %s: %s", row.image_reference, exc)
+                conn.execute(text("DELETE FROM face_profiles WHERE id = :id"), {"id": row.id})
+            total_deleted += len(rows)
+
+        if total_deleted:
+            logger.info("Purged %d expired face profile(s)", total_deleted)
+
+
 def main() -> None:
     logger.info("Retention worker starting — checking every %ds", RUN_INTERVAL_SECONDS)
     while True:
         try:
             cleanup_recordings()
             cleanup_snapshots()
+            cleanup_face_recognition_events()
+            cleanup_face_profiles()
         except Exception:
             logger.exception("Retention pass failed")
         time.sleep(RUN_INTERVAL_SECONDS)

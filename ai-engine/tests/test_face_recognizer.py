@@ -91,6 +91,96 @@ def test_exception_in_pipeline_never_propagates(monkeypatch):
     recognizer.maybe_recognize(camera, _frame(), 1, _person_detection(), (0.25, 0.35), [])
 
 
+def _mock_quality_and_embedding(monkeypatch):
+    monkeypatch.setattr(face_embedding, "assess_recognition_quality", lambda crop, q: face_embedding.QualityCheckResult(
+        True, "", 1, face_embedding.DetectedFace(0, 0, 50, 50), 0.9, 0.9, 0.9, 0.9
+    ))
+    monkeypatch.setattr(face_embedding, "compute_embedding", lambda crop, face: np.zeros(10, dtype=np.float32))
+    monkeypatch.setattr(fr_module, "save_snapshot", lambda camera_id, frame: "/tmp/fake.jpg")
+    monkeypatch.setattr(fr_module.backend_client, "create_snapshot", lambda payload: {"id": "snap-1"})
+
+
+def test_recording_id_is_forwarded_to_recognize_payload(monkeypatch):
+    _mock_quality_and_embedding(monkeypatch)
+    calls = []
+    monkeypatch.setattr(fr_module.backend_client, "recognize_face", lambda payload: calls.append(payload) or {"recognition_status": "UNKNOWN"})
+
+    recognizer = FaceRecognizer("cam-1")
+    recognizer.maybe_recognize({"face_recognition_enabled": True}, _frame(), 1, _person_detection(), (0.25, 0.35), [], "rec-abc")
+
+    assert calls[0]["recording_id"] == "rec-abc"
+
+
+def test_liveness_first_attempt_passes_with_nothing_to_compare(monkeypatch):
+    _mock_quality_and_embedding(monkeypatch)
+    calls = []
+    monkeypatch.setattr(fr_module.backend_client, "recognize_face", lambda payload: calls.append(payload) or {"recognition_status": "UNKNOWN"})
+
+    recognizer = FaceRecognizer("cam-1")
+    recognizer.maybe_recognize({"face_recognition_enabled": True, "liveness_detection_enabled": True}, _frame(), 1, _person_detection(), (0.25, 0.35), [])
+
+    assert len(calls) == 1  # nothing to compare against yet — fails open
+
+
+def test_liveness_rejects_a_perfectly_static_repeated_crop(monkeypatch):
+    _mock_quality_and_embedding(monkeypatch)
+    calls = []
+    monkeypatch.setattr(fr_module.backend_client, "recognize_face", lambda payload: calls.append(payload) or {"recognition_status": "UNKNOWN"})
+
+    recognizer = FaceRecognizer("cam-1")
+    camera = {"face_recognition_enabled": True, "liveness_detection_enabled": True}
+    # Bypass the cooldown by manipulating internal state directly rather than sleeping.
+    recognizer._last_attempt[1] = 0.0
+
+    identical_frame = _frame()
+    recognizer.maybe_recognize(camera, identical_frame, 1, _person_detection(), (0.25, 0.35), [])
+    recognizer._last_attempt[1] = 0.0  # simulate the cooldown having elapsed
+    recognizer.maybe_recognize(camera, identical_frame, 1, _person_detection(), (0.25, 0.35), [])
+
+    # First attempt has nothing to compare against (passes); second is pixel-identical
+    # to the first (a real live camera would never produce two byte-identical frames)
+    # and must be rejected before ever calling recognize_face.
+    assert len(calls) == 1
+
+
+def test_liveness_accepts_a_genuinely_different_crop(monkeypatch):
+    _mock_quality_and_embedding(monkeypatch)
+    calls = []
+    monkeypatch.setattr(fr_module.backend_client, "recognize_face", lambda payload: calls.append(payload) or {"recognition_status": "UNKNOWN"})
+
+    recognizer = FaceRecognizer("cam-1")
+    camera = {"face_recognition_enabled": True, "liveness_detection_enabled": True}
+
+    frame_a = _frame()
+    frame_b = np.full((400, 400, 3), 200, dtype=np.uint8)  # clearly different brightness
+
+    recognizer._last_attempt[1] = 0.0
+    recognizer.maybe_recognize(camera, frame_a, 1, _person_detection(), (0.25, 0.35), [])
+    recognizer._last_attempt[1] = 0.0
+    recognizer.maybe_recognize(camera, frame_b, 1, _person_detection(), (0.25, 0.35), [])
+
+    assert len(calls) == 2
+
+
+def test_liveness_disabled_by_default_ignores_static_repeats(monkeypatch):
+    """Regression guard: liveness_detection_enabled defaults to falsy/absent — a
+    camera dict without it must behave exactly as before this feature existed."""
+    _mock_quality_and_embedding(monkeypatch)
+    calls = []
+    monkeypatch.setattr(fr_module.backend_client, "recognize_face", lambda payload: calls.append(payload) or {"recognition_status": "UNKNOWN"})
+
+    recognizer = FaceRecognizer("cam-1")
+    camera = {"face_recognition_enabled": True}
+    identical_frame = _frame()
+
+    recognizer._last_attempt[1] = 0.0
+    recognizer.maybe_recognize(camera, identical_frame, 1, _person_detection(), (0.25, 0.35), [])
+    recognizer._last_attempt[1] = 0.0
+    recognizer.maybe_recognize(camera, identical_frame, 1, _person_detection(), (0.25, 0.35), [])
+
+    assert len(calls) == 2
+
+
 def test_low_quality_face_skips_without_calling_backend(monkeypatch):
     monkeypatch.setattr(face_embedding, "assess_recognition_quality", lambda crop, q: face_embedding.QualityCheckResult(
         False, "too small", 0, None, 0.0, 0.0, 0.0, 0.0

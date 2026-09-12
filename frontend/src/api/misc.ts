@@ -1,4 +1,4 @@
-import { apiRequest } from "./client";
+import { API_URL, apiRequest, tokenStore } from "./client";
 
 export interface Recording {
   id: string;
@@ -13,6 +13,14 @@ export interface Recording {
 }
 
 export const listRecordings = () => apiRequest<Recording[]>("/api/recordings");
+export const getRecording = (id: string) => apiRequest<Recording>(`/api/recordings/${id}`);
+
+// Same query-param-token pattern as cameras.ts::getStreamUrl — a <video src="..."> tag
+// can't set an Authorization header.
+export function getRecordingPlayUrl(recordingId: string): string {
+  const token = tokenStore.getAccess() || "";
+  return `${API_URL}/api/recordings/${recordingId}/play?token=${encodeURIComponent(token)}`;
+}
 
 export interface AIRule {
   id: string;

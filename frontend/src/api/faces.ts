@@ -68,3 +68,23 @@ export const getFaceStatistics = () => apiRequest<FaceStatistics>("/api/face-sta
 export const listFaceAlerts = () => apiRequest<Record<string, unknown>[]>("/api/face-alerts");
 
 export const listFaceViolations = () => apiRequest<Record<string, unknown>[]>("/api/face-violations");
+
+// Authenticated CSV download — same reasoning as fetchPersonPhoto: the endpoint needs
+// the normal Authorization header, so this fetches it as a blob and triggers a real
+// browser download rather than linking to it directly.
+export async function downloadFaceAppearancesCsv(personId: string, personName: string): Promise<void> {
+  const token = tokenStore.getAccess();
+  const resp = await fetch(`${API_URL}/api/reports/face-appearances.csv?person_id=${personId}`, {
+    headers: token ? { Authorization: `Bearer ${token}` } : {},
+  });
+  if (!resp.ok) throw new Error("Failed to export appearance history");
+  const blob = await resp.blob();
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = `${personName.replace(/\s+/g, "-").toLowerCase()}-appearances.csv`;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  URL.revokeObjectURL(url);
+}

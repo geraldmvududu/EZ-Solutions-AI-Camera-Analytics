@@ -78,3 +78,26 @@ def test_video_file_test_connection_reports_missing_file(client, admin_user):
     resp = client.post(f"/api/cameras/{cam['id']}/test-connection", headers=auth_headers(token))
     assert resp.status_code == 200
     assert resp.json()["success"] is False
+
+
+def test_internal_active_cameras_includes_tenant_liveness_setting(client, admin_user):
+    """GET /cameras/internal/active flattens the tenant's FaceRecognitionSettings.
+    liveness_detection_enabled onto each camera — ai-engine's FaceRecognizer has no
+    other way to read a tenant-level (not camera-level) setting."""
+    token = login(client, admin_user.email)
+    client.post("/api/cameras", json={"name": "Front Gate", "source_type": "SIMULATED"}, headers=auth_headers(token))
+    client.put("/api/face-settings", json={"liveness_detection_enabled": True}, headers=auth_headers(token))
+
+    resp = client.get("/api/cameras/internal/active", headers={"X-Internal-Token": "test-internal-token"})
+    assert resp.status_code == 200
+    cameras = resp.json()
+    assert len(cameras) == 1
+    assert cameras[0]["liveness_detection_enabled"] is True
+
+
+def test_internal_active_cameras_default_liveness_is_false(client, admin_user):
+    token = login(client, admin_user.email)
+    client.post("/api/cameras", json={"name": "Front Gate", "source_type": "SIMULATED"}, headers=auth_headers(token))
+
+    resp = client.get("/api/cameras/internal/active", headers={"X-Internal-Token": "test-internal-token"})
+    assert resp.json()[0]["liveness_detection_enabled"] is False

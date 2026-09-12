@@ -19,7 +19,8 @@ ai-engine/   OpenCV-based video capture, privacy-zone masking (applied first, be
              editing a zone takes effect within one discovery cycle, not a full
              ai-engine restart.
 worker/      Standalone retention-policy cleanup (deletes expired, non-evidence-locked
-             recordings/snapshots) — plain SQL against the same Postgres DB
+             recordings/snapshots, face recognition events, and expired face profiles)
+             — plain SQL against the same Postgres DB
 frontend/    React + TypeScript + Vite + Tailwind SPA
 nginx/       Reverse proxy + TLS termination (self-signed cert generated on first run)
 mobile/      Not started — see "Known limitations"
@@ -111,6 +112,76 @@ answer to "flag an enrolled person doing something like jumping a gate and keep 
 a file I can open" — open **Incidents** and click a row to see the full description,
 linked alert/evidence, and set a status/resolution.
 
+**Facial Recognition Phase 2 — recording linkage, in-browser playback, and
+higher-confidence recognition**: `ai-engine/app/core/recorder.py::SegmentRecorder`
+creates the `Recording` row via `POST /api/recordings` the moment a segment starts
+(not when it closes), storing the returned ID as `self.recording_id` -- this is what
+makes it possible to attach a real `recording_id` to a face-recognition or
+tripwire/zone-violation `Event` while the segment covering that moment is still being
+written. `worker.py` threads `self._recorder.recording_id` into violation event
+payloads and into `FaceRecognizer.maybe_recognize()`; `POST /api/faces/recognize`
+persists it on both the `Event` and the `FaceRecognitionEvent` row. Because
+`rule_engine.evaluate_event` already copies `event.recording_id` onto any `Alert` it
+creates, and Incidents already link to those Alerts, this required zero changes to
+`rule_engine.py`/`violation_service.py` -- the linkage just started being populated
+(`tests/test_recording_linkage.py`). `stop()` finalizes the same row via
+`PATCH /api/recordings/{id}/internal` (`ended_at`/`duration_seconds`/`file_size_bytes`)
+instead of creating a second one.
+
+Recordings now play inline: `GET /api/recordings/{id}/play?token=` (query-token auth,
+the same pattern as the live-stream endpoint) returns the file via Starlette's
+`FileResponse` without a `filename=` kwarg so it doesn't force a download, and Range
+requests (so seeking works) are handled by `FileResponse` itself -- no extra code.
+`Recordings.tsx` exports a reusable `VideoPlayerModal` wired into Recordings,
+Recognition Events, Incidents (per linked alert), and Enrolled People's new
+"Appearances" view; each caller computes a `seekSeconds` offset client-side from the
+relevant event's real occurrence timestamp minus the recording's `started_at` --
+Incidents specifically fetches the underlying `Event` via `getEvent(alert.event_id)`
+and uses `event.occurred_at`, not `alert.created_at` (the Alert row's own DB-insert
+timestamp), since those are conceptually different fields that happen to look similar
+in real-time operation. Verified in a real browser with a `seeked`-event listener
+reading `video.currentTime` at the exact moment the seek completed (not after a
+polling delay, which -- misleadingly -- can show the correct seek having already
+progressed under `autoPlay`): landed on exactly the expected offset.
+
+Critical bug found and fixed while building this: `cv2.VideoWriter`'s `mp4v` fourcc --
+the only codec this environment's OpenCV/FFmpeg build can open for writing, since the
+`avc1`/H264 fourccs fail here with a missing-OpenH264-library error -- produces real,
+valid video (readable by cv2 itself, VLC, ffplay) that Chrome's `<video>` tag flatly
+refuses to decode (`MEDIA_ERR_SRC_NOT_SUPPORTED`), confirmed directly against a real
+recorded file in a real browser. This would have silently broken the entire
+"linked to camera recordings" feature -- the link would exist, but clicking it would
+show a black, non-functional player. Fixed by adding
+`SegmentRecorder._transcode_to_h264()`, which shells out to the system `ffmpeg` binary
+(installed via apt in `ai-engine/Dockerfile` -- a full Ubuntu build, not OpenCV's
+bundled/limited one) right after `stop()` closes the file, re-encoding to
+H.264/yuv420p/faststart and replacing the file in place so the existing DB row's
+`file_path` is unaffected. If ffmpeg is missing or the transcode fails, the original
+mp4v file is kept rather than losing the recording (still usable as evidence in
+VLC/ffplay, just not in-browser). See limitation 15 for the one piece of this that
+could not be verified from the Windows dev machine.
+
+Two further real, narrowly-scoped features, not oversold: multi-frame confirmation
+(`app/api/routes/faces.py`, a module-level `_pending_confirmations` dict, same
+single-process caveat already accepted for the in-memory rate-limit fallback) requires
+two consecutive `recognize_face` calls for the same `(camera_id, tracking_id)` to agree
+before an Event/Alert is created -- the first call returns `PENDING_CONFIRMATION`
+without creating anything; this is attempt-level confirmation (attempts are already
+~30s cooldown-spaced), not true same-second multi-frame voting. Liveness
+(`ai-engine/app/core/face_recognizer.py::_passes_liveness_check`) keeps the previous
+recognition attempt's downsampled face crop per track_id and requires a minimum
+pixel-difference between consecutive attempts -- this genuinely rejects a perfectly
+static printed photo or paused video held up to the camera; it does not defend against
+a moving photo or a played video, and is not real depth/IR-based biometric liveness
+(limitation 12 already documents why that's out of scope). Retention enforcement
+(`worker/app.py::cleanup_face_recognition_events`/`cleanup_face_profiles`) now actually
+runs, using per-tenant `FaceRecognitionSettings` retention-day fields computed in
+Python (portable across SQLite/Postgres, unlike the recordings/snapshots cleanup
+functions' Postgres-specific `now() - interval` SQL) and skipping any event linked to
+a still-open Incident. A person's full appearance history is browsable (Enrolled
+People -> "Appearances") and exportable
+(`GET /api/reports/face-appearances.csv?person_id=`).
+
 ## Development commands
 
 ```bash
@@ -133,7 +204,7 @@ cd ai-engine && python -m app.main
 ## Testing commands
 
 ```bash
-cd backend && pytest -q      # 86 tests: auth, RBAC, tenant isolation, camera CRUD
+cd backend && pytest -q      # 100 tests: auth, RBAC, tenant isolation, camera CRUD
                               # (including the delete cascade covering every dependent
                               # table), credential encryption, rule engine, analytics
                               # aggregates, report export, the Redis-backed rate limiter
@@ -142,18 +213,28 @@ cd backend && pytest -q      # 86 tests: auth, RBAC, tenant isolation, camera CR
                               # facial recognition (enrollment quality gates/duplicate
                               # detection, the real LBP algorithm unmocked, recognition
                               # matching, person_category/status rule conditions, tenant
-                              # isolation of biometric data, audit logging), and the
-                              # identified-person violation -> auto-Incident correlation
-                              # — all against a real in-memory SQLite DB through the
-                              # actual FastAPI app
-cd ai-engine && pytest -q    # 36 tests: centroid tracker, zone/tripwire geometry,
+                              # isolation of biometric data, audit logging), the
+                              # identified-person violation -> auto-Incident correlation,
+                              # recording_id propagating Event -> Alert -> Incident,
+                              # multi-frame confirmation's pending/confirm logic, and the
+                              # face-appearances CSV export — all against a real
+                              # in-memory SQLite DB through the actual FastAPI app
+cd ai-engine && pytest -q    # 48 tests: centroid tracker, zone/tripwire geometry,
                               # loitering timer, motion detection (real MOG2 background
                               # subtraction against synthetic frames), privacy-zone
-                              # blurring, the discovery-loop config fingerprint, and the
+                              # blurring, the discovery-loop config fingerprint, the
                               # FaceRecognizer pipeline (cooldown, zone filtering,
                               # identity tracking/expiry for the violation correlation,
-                              # exception-safety — a recognition bug must never stop
-                              # the capture loop)
+                              # liveness frame-diff rejection, exception-safety — a
+                              # recognition bug must never stop the capture loop), and
+                              # SegmentRecorder (create-at-start/finalize-at-stop,
+                              # the ffmpeg H.264 transcode step and its fallback paths —
+                              # subprocess mocked, since this dev machine has no
+                              # verified local ffmpeg build; see limitation 15)
+cd worker && pytest -q       # 6 tests: retention cleanup for recordings/snapshots/
+                              # face-recognition-events/face-profiles against a real
+                              # SQLite DB with a hand-crafted minimal schema — the
+                              # service's first-ever tests (previously untested)
 cd frontend && npm run build # TypeScript strict-mode compile + production bundle
 ```
 
@@ -286,23 +367,21 @@ limitation 13), `FACE_PATH` (`/data/faces`, enrolled-photo storage).
    use the same TLS path the web dashboard does. This is a real, unresolved gap, not a
    workaround to remove later — it stays until a CA-trusted cert (`scripts/setup-letsencrypt.sh`,
    needs a real domain) is in place, at which point port 8000 should be closed again.
-12. **Facial Recognition, Phase 1 scope** (deliberately phased — see the Phase 2
-   backlog items below, not silently dropped): the LBP-histogram
-   matcher is a real, classic algorithm but has genuinely lower discriminative accuracy
-   than a modern CNN face embedding — expect more false positives/negatives at the
-   default 85% threshold than a commercial system, especially across lighting/angle
-   variation; tune `face_recognition_threshold` per camera if needed. Liveness/anti-
-   spoofing is **not implemented** (real spoof detection needs a depth/IR sensor a lab
-   webcam pipeline doesn't have — the `liveness_detection_enabled` setting exists in
-   the schema for Phase 2 but currently does nothing). No automated retention/deletion
-   background job yet for `face_recognition_events`/snapshots (the `FaceRecognitionSettings`
-   retention-day fields are stored and configurable but not yet enforced — manual
-   deletion via the Enrolled People page works today). No PDF/CSV/Excel reports for
-   face data yet (the existing `reports.py`/reportlab pattern is the intended
-   follow-up). Person-to-camera/zone authorization is by **category/status**
+12. **Facial Recognition accuracy ceiling** (real, structural — not a Phase 2 gap):
+   the LBP-histogram matcher is a real, classic algorithm but has genuinely lower
+   discriminative accuracy than a modern CNN face embedding — expect more false
+   positives/negatives at the default 85% threshold than a commercial system,
+   especially across lighting/angle variation; tune `face_recognition_threshold` per
+   camera if needed. Liveness (limitation 12b below, Phase 2) narrows but does not
+   close this gap — it rejects only a perfectly static photo, not a moving one.
+   Person-to-camera/zone authorization is by **category/status**
    (`person_category`/`person_status` rule conditions), not a fine-grained per-person-
-   per-camera ACL — the spec's own schema didn't define one either. No written AWS
-   deployment guide yet.
+   per-camera ACL — the spec's own schema didn't define one either. Cross-camera
+   person re-identification (a single stitched "journey" across multiple cameras) is
+   explicitly out of scope — the Appearances view is a per-person list of individual
+   camera events, not a re-id track; genuine cross-camera re-id is a materially harder
+   CV problem this LBP-based pipeline isn't built for. No written AWS deployment guide
+   yet.
 13. **Per-tenant face settings partially synced to ai-engine**: `POST /api/faces/recognize`
    reads a tenant's `FaceRecognitionSettings.default_match_threshold` live (admin
    changes to the match threshold in Settings take effect on the very next
@@ -318,6 +397,30 @@ limitation 13), `FACE_PATH` (`/data/faces`, enrolled-photo storage).
    Dashboard/Enrolled People/..." tree sketched in the original spec — introducing
    nested-menu UI infrastructure used nowhere else in the app was judged out of scope
    for "don't redesign the existing application."
+15. **The recording H.264 transcode step (`SegmentRecorder._transcode_to_h264`,
+   see the Architecture section above) could not be fully verified end-to-end on this
+   Windows dev machine.** The bug it fixes (mp4v output being unplayable in Chrome) was
+   confirmed directly against a real recorded file in a real browser. The fix itself,
+   shelling out to the system `ffmpeg` binary, was verified by installing a real
+   `ffmpeg` build on the Windows dev machine (`winget install --id Gyan.FFmpeg`) and
+   confirming both the exact transcode command syntax and that its output plays
+   correctly in a real browser (`readyState: 4`, correct duration/dimensions,
+   `error: null`). What was not verified from this machine is the actual target
+   Linux deployment's `ffmpeg` (installed via apt in `ai-engine/Dockerfile`) doing this
+   for real, since the ai-engine container only runs on the deployed Ubuntu VM. Once
+   deployed: record a real clip, confirm it plays from the Recordings page, and check
+   `docker compose logs ai-engine` for "ffmpeg transcode failed"/"ffmpeg transcode
+   skipped" warnings, which would mean the fallback (original mp4v file, still saved as
+   evidence but not browser-playable) is silently in effect.
+16. **Multi-frame confirmation and liveness cooldown timing are not synced from
+   tenant settings on the ai-engine side** (same underlying gap as limitation 13): a
+   PENDING_CONFIRMATION result from `POST /api/faces/recognize` relies on ai-engine
+   sending a second recognition attempt for the same (camera_id, tracking_id) within
+   `_MULTI_FRAME_CONFIRMATION_WINDOW_SECONDS` (120s) of the first. If ai-engine's own
+   cooldown (`FACE_EVENT_COOLDOWN`, limitation 13) is configured longer than that
+   window, confirmation will never complete and no Event/Alert will ever be created for
+   that person at that camera. Keep `FACE_EVENT_COOLDOWN` under 120s wherever
+   `multi_frame_confirmation_enabled` is on for a tenant.
 
 ## Current implementation status
 
@@ -332,7 +435,7 @@ limitation 13), `FACE_PATH` (`/data/faces`, enrolled-photo storage).
 | 7. Mobile | Login, camera list, live view, alerts, recording playback, push notifications, and an in-app notification feed are done |
 | 8. Multi-tenancy | Data model + isolation enforced and tested; no tenant self-signup UI |
 | 9. Production hardening (real TLS, Redis rate limit, perf) | Redis-backed rate limiting done; real-TLS automation done (`scripts/setup-letsencrypt.sh`, needs the user's own domain to run) |
-| 10. Facial Recognition & Identity Analytics | Phase 1 done, tested, verified in a real browser — enroll/manage people, real detect→embed→match pipeline, recognition events feeding the existing event/alert/rule/notification/WebSocket pipeline, camera + zone config, human review. Reports, retention jobs, liveness, and full rules-builder UI are Phase 2 (see limitation 12) |
+| 10. Facial Recognition & Identity Analytics | Phase 1 + Phase 2 done, tested, verified in a real browser — enroll/manage people, real detect→embed→match pipeline, recognition events feeding the existing event/alert/rule/notification/WebSocket pipeline, camera + zone config, human review, identified-person violation → auto-Incident, recordings linked to face/violation events with in-browser seekable playback, multi-frame confirmation, liveness (narrow scope, limitation 12), retention enforcement, and a CSV appearance-history export. Full drag-and-drop rules-builder UI is still out of scope (rules are managed via the existing generic Rules page) |
 
 ## Verified end-to-end (not just "should work")
 
@@ -460,3 +563,22 @@ limitation 13), `FACE_PATH` (`/data/faces`, enrolled-photo storage).
   (a `python -m json.tool`-piped terminal check of the same data had shown mojibake —
   that turned out to be a Windows console/pipe encoding artifact, not a real bug, and
   the browser check is what actually settled it).
+- Facial Recognition Phase 2's recording linkage and playback, end-to-end in a real
+  browser. First caught a critical bug this way: a recording made through the real
+  `SegmentRecorder` loaded into a real `<video>` element and failed with
+  `error.code: 4` (`MEDIA_ERR_SRC_NOT_SUPPORTED`) — direct JS inspection of the video
+  element confirmed Chrome could not decode the mp4v file at all. Installed a real
+  `ffmpeg` binary on the Windows dev machine (no local ffmpeg had been available before
+  this) via `winget install --id Gyan.FFmpeg`, fixed `SegmentRecorder` to transcode to
+  H.264 on `stop()`, and re-verified: the transcoded file reported `readyState: 4`,
+  correct `duration`/`videoWidth`/`videoHeight`, and `error: null` in the same browser.
+  Second, opened a real Incident's linked Alert's "View in recording" action and used a
+  `document.addEventListener('seeked', ..., true)` capture-phase listener to read
+  `video.currentTime` at the exact instant the seek completed (not after a delay, which
+  is misleading here — `autoPlay` continues advancing `currentTime` after a correct
+  seek, so a delayed check can show a plausible-looking but wrong number even when the
+  seek itself was exact): landed on `currentTime: 4` against a fixture where
+  `event.occurred_at` was exactly 4 seconds after `recording.started_at` — confirming
+  the seek math (`event.occurred_at - recording.started_at`, not `alert.created_at`) is
+  correct. `cd backend/ai-engine/worker && pytest -q` all green (100/48/6) and
+  `cd frontend && npm run build` clean throughout.

@@ -10,10 +10,11 @@ from app.core.permissions import Permissions
 from app.database import get_db
 from app.models.alert import Alert
 from app.models.event import Event
+from app.models.face_recognition_event import FaceRecognitionEvent
 from app.models.tenant import Tenant
 from app.models.user import User
 from app.services.analytics_service import get_analytics_summary
-from app.services.report_service import alerts_to_csv, build_security_report_pdf, events_to_csv
+from app.services.report_service import alerts_to_csv, build_security_report_pdf, events_to_csv, face_appearances_to_csv
 
 router = APIRouter(prefix="/reports", tags=["reports"])
 
@@ -70,6 +71,29 @@ def export_alerts_csv(
         content=csv_content,
         media_type="text/csv",
         headers={"Content-Disposition": "attachment; filename=alerts.csv"},
+    )
+
+
+@router.get("/face-appearances.csv")
+def export_face_appearances_csv(
+    person_id: uuid.UUID,
+    start: datetime | None = None,
+    end: datetime | None = None,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_permission(Permissions.VIEW_BIOMETRIC_EVENTS)),
+) -> Response:
+    query = db.query(FaceRecognitionEvent).filter(FaceRecognitionEvent.person_id == person_id)
+    tenant_id = tenant_filter_value(user)
+    if tenant_id:
+        query = query.filter(FaceRecognitionEvent.tenant_id == tenant_id)
+    query = _apply_range(query, FaceRecognitionEvent, start, end, "event_timestamp")
+
+    appearances = query.order_by(FaceRecognitionEvent.event_timestamp.desc()).limit(50_000).all()
+    csv_content = face_appearances_to_csv(appearances)
+    return Response(
+        content=csv_content,
+        media_type="text/csv",
+        headers={"Content-Disposition": "attachment; filename=face-appearances.csv"},
     )
 
 
