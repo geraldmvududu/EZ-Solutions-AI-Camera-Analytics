@@ -101,3 +101,27 @@ def test_internal_active_cameras_default_liveness_is_false(client, admin_user):
 
     resp = client.get("/api/cameras/internal/active", headers={"X-Internal-Token": "test-internal-token"})
     assert resp.json()[0]["liveness_detection_enabled"] is False
+
+
+def test_internal_active_cameras_includes_tenant_recognition_cooldown(client, admin_user):
+    """GET /cameras/internal/active flattens the tenant's FaceRecognitionSettings.
+    recognition_cooldown_seconds onto each camera — without this, an admin's cooldown
+    change in Settings would never reach ai-engine's FaceRecognizer, which would keep
+    using its own static FACE_EVENT_COOLDOWN env var regardless of what's configured."""
+    token = login(client, admin_user.email)
+    client.post("/api/cameras", json={"name": "Front Gate", "source_type": "SIMULATED"}, headers=auth_headers(token))
+    client.put("/api/face-settings", json={"recognition_cooldown_seconds": 90}, headers=auth_headers(token))
+
+    resp = client.get("/api/cameras/internal/active", headers={"X-Internal-Token": "test-internal-token"})
+    assert resp.status_code == 200
+    cameras = resp.json()
+    assert len(cameras) == 1
+    assert cameras[0]["recognition_cooldown_seconds"] == 90
+
+
+def test_internal_active_cameras_default_recognition_cooldown_matches_model_default(client, admin_user):
+    token = login(client, admin_user.email)
+    client.post("/api/cameras", json={"name": "Front Gate", "source_type": "SIMULATED"}, headers=auth_headers(token))
+
+    resp = client.get("/api/cameras/internal/active", headers={"X-Internal-Token": "test-internal-token"})
+    assert resp.json()[0]["recognition_cooldown_seconds"] == 30

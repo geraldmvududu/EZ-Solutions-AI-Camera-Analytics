@@ -17,7 +17,7 @@ from sqlalchemy.orm import Session
 from app.models.alert import Alert
 from app.models.event import Event
 from app.models.face_recognition_event import FaceRecognitionEvent
-from app.schemas.analytics import AnalyticsSummary
+from app.schemas.analytics import AnalyticsSummary, NamedCount
 
 
 def events_to_csv(events: list[Event]) -> str:
@@ -59,7 +59,18 @@ def face_appearances_to_csv(appearances: list[FaceRecognitionEvent]) -> str:
     return buffer.getvalue()
 
 
-def build_security_report_pdf(summary: AnalyticsSummary, tenant_name: str) -> bytes:
+def build_security_report_pdf(
+    summary: AnalyticsSummary,
+    tenant_name: str,
+    face_recognition_by_status: list[NamedCount] | None = None,
+    top_recognized_people: list[NamedCount] | None = None,
+) -> bytes:
+    """The two face-recognition params are optional and independent of everything
+    else here: the caller (app/api/routes/reports.py) only passes them when the
+    requesting user actually has view_biometric_events, so a viewer without that
+    permission gets a complete report minus this section rather than a 403 on the
+    whole PDF. None skips the section entirely; an empty list still renders it with
+    a real "No data for this period." message, same as every other section here."""
     buffer = io.BytesIO()
     doc = SimpleDocTemplate(buffer, pagesize=letter, topMargin=0.75 * inch, bottomMargin=0.75 * inch)
     styles = getSampleStyleSheet()
@@ -103,6 +114,11 @@ def build_security_report_pdf(summary: AnalyticsSummary, tenant_name: str) -> by
     section("Alerts by Severity", [[c.label, str(c.count)] for c in summary.alerts_by_severity], ["Severity", "Count"])
     section("Detections by Object Type", [[c.label, str(c.count)] for c in summary.detections_by_object_type], ["Object Type", "Count"])
     section("Camera Status", [[c.label, str(c.count)] for c in summary.camera_status_summary], ["Status", "Cameras"])
+
+    if face_recognition_by_status is not None:
+        section("Face Recognition Activity", [[c.label, str(c.count)] for c in face_recognition_by_status], ["Status", "Count"])
+    if top_recognized_people is not None:
+        section("Top Recognized People", [[c.label, str(c.count)] for c in top_recognized_people], ["Person", "Appearances"])
 
     doc.build(story)
     return buffer.getvalue()

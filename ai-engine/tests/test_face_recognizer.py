@@ -58,6 +58,36 @@ def test_cooldown_prevents_immediate_re_recognition(monkeypatch):
     assert len(calls) == 1
 
 
+def test_cooldown_uses_camera_dict_value_over_static_setting(monkeypatch):
+    """recognition_cooldown_seconds is a tenant-level FaceRecognitionSettings field
+    flattened onto the camera dict by GET /cameras/internal/active (same as
+    liveness_detection_enabled) — an admin's Settings change must actually change
+    behavior here, not just sit unused while ai-engine keeps using its own static
+    FACE_EVENT_COOLDOWN env var."""
+    monkeypatch.setattr(face_embedding, "assess_recognition_quality", lambda crop, q: face_embedding.QualityCheckResult(
+        True, "", 1, face_embedding.DetectedFace(0, 0, 50, 50), 0.9, 0.9, 0.9, 0.9
+    ))
+    monkeypatch.setattr(face_embedding, "compute_embedding", lambda crop, face: np.zeros(10, dtype=np.float32))
+    monkeypatch.setattr(fr_module, "save_snapshot", lambda camera_id, frame: "/tmp/fake.jpg")
+    monkeypatch.setattr(fr_module.backend_client, "create_snapshot", lambda payload: {"id": "snap-1"})
+
+    calls = []
+    monkeypatch.setattr(fr_module.backend_client, "recognize_face", lambda payload: calls.append(payload) or {"recognition_status": "UNKNOWN", "confidence_score": 0.0})
+
+    recognizer = FaceRecognizer("cam-1")
+    # The static settings.face_event_cooldown default (30s, see app/config.py) would
+    # normally block a second immediate attempt — an explicit 0-second cooldown on the
+    # camera dict must override that and let the second attempt through.
+    camera = {"face_recognition_enabled": True, "recognition_cooldown_seconds": 0}
+    detection = _person_detection()
+    centroid = (0.25, 0.35)
+
+    recognizer.maybe_recognize(camera, _frame(), 1, detection, centroid, [])
+    recognizer.maybe_recognize(camera, _frame(), 1, detection, centroid, [])  # immediate retry, same track
+
+    assert len(calls) == 2
+
+
 def test_face_exclusion_zone_blocks_recognition(monkeypatch):
     monkeypatch.setattr(fr_module.backend_client, "recognize_face", lambda payload: (_ for _ in ()).throw(AssertionError("should not be called")))
     recognizer = FaceRecognizer("cam-1")

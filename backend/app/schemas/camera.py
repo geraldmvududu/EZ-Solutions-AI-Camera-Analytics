@@ -97,8 +97,13 @@ class CameraResponse(BaseModel):
 
 class CameraInternalResponse(CameraResponse):
     """Used only by GET /cameras/internal/active (ai-engine's discovery poll).
-    liveness_detection_enabled is a tenant-level FaceRecognitionSettings field, not a
-    camera column — flattened on here rather than added to CameraResponse itself,
-    since it's meaningless on the regular user-facing camera list/detail responses."""
+    liveness_detection_enabled and recognition_cooldown_seconds are tenant-level
+    FaceRecognitionSettings fields, not camera columns — flattened on here rather than
+    added to CameraResponse itself, since they're meaningless on the regular
+    user-facing camera list/detail responses. recognition_cooldown_seconds lets
+    ai-engine's FaceRecognizer honor a tenant's admin-configured cooldown instead of
+    its own static FACE_EVENT_COOLDOWN env var (previously the only source — see
+    CLAUDE.md "Known limitations")."""
 
     liveness_detection_enabled: bool = False
+    recognition_cooldown_seconds: int = 30

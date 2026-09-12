@@ -113,7 +113,14 @@ class FaceRecognizer:
     def _maybe_recognize(
         self, camera: dict, frame, track_id: int, detection: Detection, centroid, face_zones: list[dict], recording_id: str | None
     ) -> None:
-        cooldown = settings.face_event_cooldown
+        # recognition_cooldown_seconds is a tenant-level FaceRecognitionSettings field
+        # flattened onto the camera dict by GET /cameras/internal/active (same pattern
+        # as liveness_detection_enabled below) — this is what lets an admin's Settings
+        # change actually take effect here, instead of every tenant being stuck on
+        # this process's static FACE_EVENT_COOLDOWN env var regardless of what they
+        # configure. Falls back to the static value only if the field is absent
+        # (e.g. an older backend that hasn't been upgraded yet).
+        cooldown = camera.get("recognition_cooldown_seconds", settings.face_event_cooldown)
         now = time.time()
         if now - self._last_attempt.get(track_id, 0.0) < cooldown:
             return

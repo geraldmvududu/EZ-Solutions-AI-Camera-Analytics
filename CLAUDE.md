@@ -182,6 +182,22 @@ a still-open Incident. A person's full appearance history is browsable (Enrolled
 People -> "Appearances") and exportable
 (`GET /api/reports/face-appearances.csv?person_id=`).
 
+**Recognition cooldown sync + PDF face-recognition section** (the two remaining Phase
+2 backlog items, now done): `recognition_cooldown_seconds` is flattened onto each
+camera dict by `GET /cameras/internal/active` exactly like `liveness_detection_enabled`
+already was, and `ai-engine/app/core/face_recognizer.py`'s cooldown check now reads
+`camera.get("recognition_cooldown_seconds", settings.face_event_cooldown)` instead of
+always using its own static env var -- an admin's Settings change now genuinely
+reaches ai-engine (within one discovery cycle, since the config-fingerprint diff in
+`main.py` already restarts a camera's worker on any dict field change, with zero code
+change needed there). `GET /api/reports/security-report.pdf` now also includes a real
+"Face Recognition Activity" (counts by RECOGNIZED/UNKNOWN/LOW_CONFIDENCE) and "Top
+Recognized People" section, built via `app/services/analytics_service.py
+::get_face_recognition_report_data` (the same SQL GROUP BY convention as every other
+analytics aggregate here, not a Python loop over loaded rows) -- gated behind the same
+`view_biometric_events` permission the CSV export already requires, so a user without
+it gets a complete report minus that one section rather than a 403 on the whole PDF.
+
 ## Development commands
 
 ```bash
@@ -204,7 +220,7 @@ cd ai-engine && python -m app.main
 ## Testing commands
 
 ```bash
-cd backend && pytest -q      # 100 tests: auth, RBAC, tenant isolation, camera CRUD
+cd backend && pytest -q      # 106 tests: auth, RBAC, tenant isolation, camera CRUD
                               # (including the delete cascade covering every dependent
                               # table), credential encryption, rule engine, analytics
                               # aggregates, report export, the Redis-backed rate limiter
@@ -216,19 +232,25 @@ cd backend && pytest -q      # 100 tests: auth, RBAC, tenant isolation, camera C
                               # isolation of biometric data, audit logging), the
                               # identified-person violation -> auto-Incident correlation,
                               # recording_id propagating Event -> Alert -> Incident,
-                              # multi-frame confirmation's pending/confirm logic, and the
-                              # face-appearances CSV export — all against a real
-                              # in-memory SQLite DB through the actual FastAPI app
-cd ai-engine && pytest -q    # 48 tests: centroid tracker, zone/tripwire geometry,
+                              # multi-frame confirmation's pending/confirm logic, the
+                              # face-appearances CSV export, recognition_cooldown_seconds
+                              # flattening onto GET /cameras/internal/active, and the PDF
+                              # security report's Face Recognition section (both its real
+                              # GROUP BY aggregate and the view_biometric_events gate) —
+                              # all against a real in-memory SQLite DB through the actual
+                              # FastAPI app
+cd ai-engine && pytest -q    # 49 tests: centroid tracker, zone/tripwire geometry,
                               # loitering timer, motion detection (real MOG2 background
                               # subtraction against synthetic frames), privacy-zone
                               # blurring, the discovery-loop config fingerprint, the
-                              # FaceRecognizer pipeline (cooldown, zone filtering,
-                              # identity tracking/expiry for the violation correlation,
-                              # liveness frame-diff rejection, exception-safety — a
-                              # recognition bug must never stop the capture loop), and
-                              # SegmentRecorder (create-at-start/finalize-at-stop,
-                              # the ffmpeg H.264 transcode step and its fallback paths —
+                              # FaceRecognizer pipeline (cooldown — including honoring a
+                              # per-camera recognition_cooldown_seconds override over the
+                              # static env var, zone filtering, identity tracking/expiry
+                              # for the violation correlation, liveness frame-diff
+                              # rejection, exception-safety — a recognition bug must never
+                              # stop the capture loop), and SegmentRecorder
+                              # (create-at-start/finalize-at-stop, the ffmpeg H.264
+                              # transcode step and its fallback paths —
                               # subprocess mocked in this unit test; the real ffmpeg
                               # binary itself is confirmed working end-to-end on the
                               # deployed Ubuntu VM, see "Verified end-to-end")
@@ -383,30 +405,35 @@ limitation 13), `FACE_PATH` (`/data/faces`, enrolled-photo storage).
    camera events, not a re-id track; genuine cross-camera re-id is a materially harder
    CV problem this LBP-based pipeline isn't built for. No written AWS deployment guide
    yet.
-13. **Per-tenant face settings partially synced to ai-engine**: `POST /api/faces/recognize`
-   reads a tenant's `FaceRecognitionSettings.default_match_threshold` live (admin
-   changes to the match threshold in Settings take effect on the very next
-   recognition), but `recognition_cooldown_seconds`/`multi_frame_confirmation_enabled`
-   are **not** — ai-engine's `FaceRecognizer` reads its own static `FACE_EVENT_COOLDOWN`
-   env var instead, the same way zones/tripwires are periodically re-fetched but this
-   particular setting isn't (yet). Wiring this up would mean ai-engine periodically
-   fetching `FaceRecognitionSettings` per tenant, similar to its existing zone/tripwire
-   discovery poll in `app/main.py`.
+13. **Per-tenant face settings synced to ai-engine**: `POST /api/faces/recognize` reads
+   a tenant's `FaceRecognitionSettings.default_match_threshold` live (admin changes to
+   the match threshold in Settings take effect on the very next recognition).
+   `recognition_cooldown_seconds` is synced too, but via the discovery-poll/fingerprint
+   mechanism rather than live-per-request: `GET /cameras/internal/active` flattens it
+   (and `liveness_detection_enabled`) onto each camera dict, the same tenant-level-
+   setting-on-a-camera-dict pattern as liveness, so a change takes effect within one
+   ai-engine discovery cycle (worker restart), not instantly. `multi_frame_confirmation_
+   enabled` itself needs no ai-engine-side sync at all — that logic lives entirely in
+   the backend (`app/api/routes/faces.py`'s `_pending_confirmations` gate), so a live DB
+   read on every `/faces/recognize` call is already correct with zero caching lag.
 14. **Sidebar navigation is flat, not nested**: the four new Face pages are added as
    flat sibling nav items (matching every other item in `Sidebar.tsx`, which has no
    nested-submenu support anywhere) rather than the nested "Facial Recognition ▸
    Dashboard/Enrolled People/..." tree sketched in the original spec — introducing
    nested-menu UI infrastructure used nowhere else in the app was judged out of scope
    for "don't redesign the existing application."
-15. **Multi-frame confirmation and liveness cooldown timing are not synced from
-   tenant settings on the ai-engine side** (same underlying gap as limitation 13): a
-   PENDING_CONFIRMATION result from `POST /api/faces/recognize` relies on ai-engine
-   sending a second recognition attempt for the same (camera_id, tracking_id) within
-   `_MULTI_FRAME_CONFIRMATION_WINDOW_SECONDS` (120s) of the first. If ai-engine's own
-   cooldown (`FACE_EVENT_COOLDOWN`, limitation 13) is configured longer than that
-   window, confirmation will never complete and no Event/Alert will ever be created for
-   that person at that camera. Keep `FACE_EVENT_COOLDOWN` under 120s wherever
-   `multi_frame_confirmation_enabled` is on for a tenant.
+15. **Multi-frame confirmation still requires the admin to configure a sane cooldown**
+   (no longer a sync gap — see limitation 13 — but a real constraint that remains): a
+   `PENDING_CONFIRMATION` result from `POST /api/faces/recognize` relies on ai-engine
+   sending a second recognition attempt for the same `(camera_id, tracking_id)` within
+   `_MULTI_FRAME_CONFIRMATION_WINDOW_SECONDS` (120s) of the first. If a tenant's
+   `recognition_cooldown_seconds` (now genuinely honored by ai-engine, per limitation
+   13) is configured above 120s while `multi_frame_confirmation_enabled` is also on,
+   confirmation will never complete and no Event/Alert will ever be created for that
+   person at that camera — there's no validation in `PUT /face-settings` today
+   preventing this inconsistent combination from being saved. Keep
+   `recognition_cooldown_seconds` under 120s wherever `multi_frame_confirmation_enabled`
+   is on for a tenant.
 
 ## Current implementation status
 

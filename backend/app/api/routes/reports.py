@@ -13,7 +13,7 @@ from app.models.event import Event
 from app.models.face_recognition_event import FaceRecognitionEvent
 from app.models.tenant import Tenant
 from app.models.user import User
-from app.services.analytics_service import get_analytics_summary
+from app.services.analytics_service import get_analytics_summary, get_face_recognition_report_data
 from app.services.report_service import alerts_to_csv, build_security_report_pdf, events_to_csv, face_appearances_to_csv
 
 router = APIRouter(prefix="/reports", tags=["reports"])
@@ -110,7 +110,21 @@ def export_security_report_pdf(
 
     summary = get_analytics_summary(db, tenant_id, range_start, range_end)
     tenant = db.get(Tenant, user.tenant_id)
-    pdf_bytes = build_security_report_pdf(summary, tenant.name if tenant else "EZ Solutions")
+
+    # Same permission that gates the dedicated face-appearances.csv export — a user
+    # who can't view biometric events gets a complete report minus this one section,
+    # not a 403 on the whole PDF.
+    face_recognition_by_status = None
+    top_recognized_people = None
+    if Permissions.VIEW_BIOMETRIC_EVENTS in {p.code for p in user.role.permissions}:
+        face_recognition_by_status, top_recognized_people = get_face_recognition_report_data(db, tenant_id, range_start, range_end)
+
+    pdf_bytes = build_security_report_pdf(
+        summary,
+        tenant.name if tenant else "EZ Solutions",
+        face_recognition_by_status=face_recognition_by_status,
+        top_recognized_people=top_recognized_people,
+    )
 
     return Response(
         content=pdf_bytes,

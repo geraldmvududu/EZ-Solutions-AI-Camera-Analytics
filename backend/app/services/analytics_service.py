@@ -14,6 +14,8 @@ from app.models.alert import Alert
 from app.models.camera import Camera
 from app.models.detection import Detection
 from app.models.event import Event
+from app.models.face_recognition_event import FaceRecognitionEvent, RecognitionStatus
+from app.models.person import Person
 from app.schemas.analytics import AnalyticsSummary, HourlyCount, NamedCount
 
 settings = get_settings()
@@ -133,3 +135,44 @@ def get_analytics_summary(
         storage_used_bytes=used,
         storage_total_bytes=total,
     )
+
+
+def get_face_recognition_report_data(
+    db: Session,
+    tenant_id: uuid.UUID | None,
+    start: datetime,
+    end: datetime,
+) -> tuple[list[NamedCount], list[NamedCount]]:
+    """Backs the PDF security report's Face Recognition section — same real GROUP BY
+    approach as the rest of this module (not a Python loop over loaded rows). Callers
+    are expected to gate this behind the view_biometric_events permission themselves
+    (see app/api/routes/reports.py), the same way the dedicated face-appearances.csv
+    export already does."""
+
+    def scope(query):
+        query = query.filter(FaceRecognitionEvent.event_timestamp >= start, FaceRecognitionEvent.event_timestamp <= end)
+        if tenant_id:
+            query = query.filter(FaceRecognitionEvent.tenant_id == tenant_id)
+        return query
+
+    by_status_rows = (
+        scope(db.query(FaceRecognitionEvent.recognition_status, func.count(FaceRecognitionEvent.id)))
+        .group_by(FaceRecognitionEvent.recognition_status)
+        .all()
+    )
+    by_status = [NamedCount(label=status.value, count=count) for status, count in by_status_rows]
+
+    top_people_rows = (
+        scope(
+            db.query(Person.first_name, Person.last_name, func.count(FaceRecognitionEvent.id))
+            .join(Person, Person.id == FaceRecognitionEvent.person_id)
+        )
+        .filter(FaceRecognitionEvent.recognition_status == RecognitionStatus.RECOGNIZED)
+        .group_by(Person.id, Person.first_name, Person.last_name)
+        .order_by(func.count(FaceRecognitionEvent.id).desc())
+        .limit(10)
+        .all()
+    )
+    top_people = [NamedCount(label=f"{first} {last}", count=count) for first, last, count in top_people_rows]
+
+    return by_status, top_people
