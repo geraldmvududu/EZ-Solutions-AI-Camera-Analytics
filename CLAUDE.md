@@ -94,6 +94,23 @@ enrolled image itself. Biometric-specific audit actions (`FACE_ENROLL`, `FACE_VI
 `FACE_MODIFY`, `FACE_DELETE`) reuse the existing generic `AuditLog`/`log_action` —
 there is no separate biometric audit table.
 
+**Identified-person violations** (`app/services/violation_service.py`): a genuine
+"Person + Behaviour" correlation (spec section 9), not a new detection capability —
+`FaceRecognizer.identity_for(track_id)` (ai-engine) remembers the most recent
+RECOGNIZED result for a still-tracked person for `IDENTITY_FRESHNESS_SECONDS` (5 min),
+and `worker.py::_identity_metadata` attaches that identity to a `TRIPWIRE_VIOLATION`/
+`INTRUSION_DETECTED` event's `event_metadata` when one fires for the same track_id —
+two independent signals (who they are, and that they crossed a boundary) correlated by
+camera+tracking, not claimed to be the same thing. When `create_event` sees a
+violation event carrying a `person_id`, it automatically opens a real `Incident`
+(reusing the existing incident model/API/page — section 5 — rather than a new
+"violations" table), linked to whatever `Alert`(s) the rule engine created from the
+same event, with a description that explicitly tells the reviewer to check the
+evidence rather than treat the correlation as confirmed proof. This is the literal
+answer to "flag an enrolled person doing something like jumping a gate and keep it on
+a file I can open" — open **Incidents** and click a row to see the full description,
+linked alert/evidence, and set a status/resolution.
+
 ## Development commands
 
 ```bash
@@ -116,20 +133,25 @@ cd ai-engine && python -m app.main
 ## Testing commands
 
 ```bash
-cd backend && pytest -q      # 77 tests: auth, RBAC, tenant isolation, camera CRUD,
-                              # credential encryption, rule engine, analytics aggregates,
-                              # report export, the Redis-backed rate limiter (fakeredis),
-                              # push notifications (Expo API call mocked), and facial
-                              # recognition (enrollment quality gates/duplicate detection,
-                              # the real LBP algorithm unmocked, recognition matching,
-                              # person_category/status rule conditions, tenant isolation
-                              # of biometric data, audit logging) — all against a real
-                              # in-memory SQLite DB through the actual FastAPI app
-cd ai-engine && pytest -q    # 32 tests: centroid tracker, zone/tripwire geometry,
+cd backend && pytest -q      # 86 tests: auth, RBAC, tenant isolation, camera CRUD
+                              # (including the delete cascade covering every dependent
+                              # table), credential encryption, rule engine, analytics
+                              # aggregates, report export, the Redis-backed rate limiter
+                              # (fakeredis, including the internal-service-token
+                              # exemption), push notifications (Expo API call mocked),
+                              # facial recognition (enrollment quality gates/duplicate
+                              # detection, the real LBP algorithm unmocked, recognition
+                              # matching, person_category/status rule conditions, tenant
+                              # isolation of biometric data, audit logging), and the
+                              # identified-person violation -> auto-Incident correlation
+                              # — all against a real in-memory SQLite DB through the
+                              # actual FastAPI app
+cd ai-engine && pytest -q    # 36 tests: centroid tracker, zone/tripwire geometry,
                               # loitering timer, motion detection (real MOG2 background
                               # subtraction against synthetic frames), privacy-zone
                               # blurring, the discovery-loop config fingerprint, and the
                               # FaceRecognizer pipeline (cooldown, zone filtering,
+                              # identity tracking/expiry for the violation correlation,
                               # exception-safety — a recognition bug must never stop
                               # the capture loop)
 cd frontend && npm run build # TypeScript strict-mode compile + production bundle
@@ -424,3 +446,17 @@ limitation 13), `FACE_PATH` (`/data/faces`, enrolled-photo storage).
   Separately, unit-level tests confirmed the real LBP algorithm itself: identical
   images produce confidence 1.0, a perturbed image produces meaningfully lower
   confidence, and the base64 embedding serialization round-trips exactly.
+- Identified-person violation → auto-Incident, end-to-end against a real backend +
+  real frontend in a browser: created a real Person/Camera, posted a real
+  `TRIPWIRE_VIOLATION` event (internal token, as ai-engine would) carrying a
+  `person_id`, and confirmed a real `Incident` was created — visited **Incidents** in
+  the browser, opened it, and saw the correct title, CRITICAL severity, resolved
+  camera name, the full auto-generated description (including the "review the
+  evidence before treating this as confirmed" caveat), and the linked `Alert` the same
+  event's rule match produced. Changed its status to INVESTIGATING and added
+  resolution notes through the new detail modal, saved, reopened it, and confirmed
+  both persisted — including that a UTF-8 em dash in the generated title/resolution
+  text round-tripped correctly through the API and rendered correctly in the browser
+  (a `python -m json.tool`-piped terminal check of the same data had shown mojibake —
+  that turned out to be a Windows console/pipe encoding artifact, not a real bug, and
+  the browser check is what actually settled it).

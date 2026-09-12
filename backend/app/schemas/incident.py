@@ -5,6 +5,7 @@ from pydantic import BaseModel
 
 from app.models.event import EventSeverity
 from app.models.incident import IncidentStatus
+from app.schemas.alert import AlertResponse
 
 
 class IncidentCreate(BaseModel):
@@ -38,5 +39,6 @@ class IncidentResponse(BaseModel):
     resolution: str
     closed_at: datetime | None
     created_at: datetime
+    related_alerts: list[AlertResponse] = []
 
     model_config = {"from_attributes": True}

@@ -12,8 +12,10 @@ from app.models.camera import Camera
 from app.models.event import Event, EventSeverity, EventType
 from app.models.user import User
 from app.schemas.event import EventCreate, EventResponse
+from app.core.audit import log_action
 from app.services import rule_engine
 from app.services.notification_service import notify_users_of_alert
+from app.services.violation_service import maybe_create_violation_incident
 from app.services.ws_manager import manager
 
 router = APIRouter(prefix="/events", tags=["events"])
@@ -91,5 +93,19 @@ async def create_event(payload: EventCreate, db: Session = Depends(get_db)) -> E
         # notify_users_of_alert does blocking DB + HTTP work (Expo push API) — run off
         # the event loop thread so one alert's push delivery can't stall other requests.
         await to_thread.run_sync(notify_users_of_alert, db, alert, camera)
+
+    incident = maybe_create_violation_incident(db, event, alerts, camera)
+    if incident is not None:
+        from app.schemas.incident import IncidentResponse
+
+        log_action(
+            db, action="INCIDENT_AUTO_CREATED", tenant_id=camera.tenant_id,
+            resource_type="incident", resource_id=str(incident.id),
+            details={"event_id": str(event.id), "title": incident.title},
+        )
+        await manager.broadcast(camera.tenant_id, {
+            "type": "incident",
+            "incident": IncidentResponse.model_validate(incident).model_dump(mode="json"),
+        })
 
     return event

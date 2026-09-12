@@ -38,10 +38,35 @@ def _within_operating_hours(camera: dict, now: dt_time | None = None) -> bool:
     return now >= start_t or now <= end_t  # window wraps past midnight
 
 
+# How long a RECOGNIZED result stays "known" for a track_id after the recognition
+# call that produced it — long enough to bridge the gap between a recognition attempt
+# and a later tripwire/zone check on the same still-tracked person (see
+# worker.py::_check_tripwires/_check_zones, which call identity_for() to attach a
+# recognized person's identity to a violation event), short enough that a stale
+# identity can't linger indefinitely if a track_id were ever reused.
+IDENTITY_FRESHNESS_SECONDS = 300
+
+
 class FaceRecognizer:
     def __init__(self, camera_id: str) -> None:
         self.camera_id = camera_id
         self._last_attempt: dict[int, float] = {}
+        self._known_identities: dict[int, tuple[float, dict]] = {}
+
+    def identity_for(self, track_id: int) -> dict | None:
+        """Returns the most recent RECOGNIZED result for this track_id
+        ({"person_id", "person_name", "confidence_score"}), or None if this track has
+        never been recognized or its last recognition has aged past
+        IDENTITY_FRESHNESS_SECONDS. Used to correlate a known person with a tripwire/
+        zone violation that fires independently of the recognition cooldown."""
+        entry = self._known_identities.get(track_id)
+        if entry is None:
+            return None
+        seen_at, identity = entry
+        if time.time() - seen_at > IDENTITY_FRESHNESS_SECONDS:
+            del self._known_identities[track_id]
+            return None
+        return identity
 
     def maybe_recognize(self, camera: dict, frame, track_id: int, detection: Detection, centroid, face_zones: list[dict]) -> None:
         try:
@@ -116,3 +141,12 @@ class FaceRecognizer:
                 "Camera %s: face recognition result — %s (%.1f%% confidence)",
                 self.camera_id, result.get("recognition_status"), (result.get("confidence_score") or 0) * 100,
             )
+            if result.get("recognition_status") == "RECOGNIZED" and result.get("person_id"):
+                self._known_identities[track_id] = (
+                    now,
+                    {
+                        "person_id": result["person_id"],
+                        "person_name": result.get("person_name"),
+                        "confidence_score": result.get("confidence_score"),
+                    },
+                )

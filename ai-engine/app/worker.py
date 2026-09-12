@@ -207,6 +207,25 @@ class CameraWorker:
             }
         )
 
+    def _identity_metadata(self, track_id: int) -> dict:
+        """Attaches a known person's identity (if this track was recently recognized —
+        see FaceRecognizer.identity_for) to a tripwire/zone violation event, so a
+        "Person + Behaviour" combined event (spec section 9) is possible: the
+        recognized identity and the boundary violation are correlated by track_id, not
+        claimed to be the same signal. Empty when face recognition isn't enabled for
+        this camera or this track was never recognized — a violation by an unenrolled/
+        unrecognized person is still reported, just without a person_id attached."""
+        if not self._face_recognizer:
+            return {}
+        identity = self._face_recognizer.identity_for(track_id)
+        if not identity:
+            return {}
+        return {
+            "person_id": identity["person_id"],
+            "person_name": identity.get("person_name"),
+            "person_recognition_confidence": identity.get("confidence_score"),
+        }
+
     def _check_tripwires(self, track_id: int, centroid, frame, detection_id) -> None:
         history = self._tracker.history_for(track_id)
         if len(history) < 2:
@@ -233,7 +252,7 @@ class CameraWorker:
                     "tripwire_id": tripwire["id"],
                     "snapshot_id": snapshot_id,
                     "occurred_at": datetime.now(timezone.utc).isoformat(),
-                    "event_metadata": {"direction": direction, "tracking_id": track_id},
+                    "event_metadata": {"direction": direction, "tracking_id": track_id, **self._identity_metadata(track_id)},
                 }
             )
 
@@ -254,7 +273,7 @@ class CameraWorker:
                         "zone_id": zone["id"],
                         "snapshot_id": snapshot_id,
                         "occurred_at": datetime.now(timezone.utc).isoformat(),
-                        "event_metadata": {"tracking_id": track_id},
+                        "event_metadata": {"tracking_id": track_id, **self._identity_metadata(track_id)},
                     }
                 )
 

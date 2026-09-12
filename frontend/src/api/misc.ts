@@ -30,13 +30,29 @@ export const createRule = (payload: Partial<AIRule> & { name: string; conditions
   apiRequest<AIRule>("/api/rules", { method: "POST", body: payload });
 export const deleteRule = (id: string) => apiRequest<void>(`/api/rules/${id}`, { method: "DELETE" });
 
+export interface IncidentAlert {
+  id: string;
+  event_id: string;
+  camera_id: string;
+  alert_type: string;
+  severity: string;
+  status: string;
+  snapshot_id: string | null;
+  recording_id: string | null;
+  created_at: string;
+}
+
 export interface Incident {
   id: string;
   title: string;
   description: string;
   severity: string;
+  camera_id: string | null;
   status: string;
+  resolution: string;
+  closed_at: string | null;
   created_at: string;
+  related_alerts: IncidentAlert[];
 }
 
 export const listIncidents = () => apiRequest<Incident[]>("/api/incidents");

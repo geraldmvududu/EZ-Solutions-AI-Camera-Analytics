@@ -8,7 +8,7 @@ from datetime import time as dt_time
 import numpy as np
 
 from app.core import face_embedding, face_recognizer as fr_module
-from app.core.face_recognizer import FaceRecognizer, _within_operating_hours
+from app.core.face_recognizer import IDENTITY_FRESHNESS_SECONDS, FaceRecognizer, _within_operating_hours
 from app.detectors.base import Detection
 
 
@@ -99,3 +99,52 @@ def test_low_quality_face_skips_without_calling_backend(monkeypatch):
 
     recognizer = FaceRecognizer("cam-1")
     recognizer.maybe_recognize({"face_recognition_enabled": True}, _frame(), 1, _person_detection(), (0.25, 0.35), [])
+
+
+def _mock_recognition_pipeline(monkeypatch, recognize_result: dict):
+    monkeypatch.setattr(face_embedding, "assess_recognition_quality", lambda crop, q: face_embedding.QualityCheckResult(
+        True, "", 1, face_embedding.DetectedFace(0, 0, 50, 50), 0.9, 0.9, 0.9, 0.9
+    ))
+    monkeypatch.setattr(face_embedding, "compute_embedding", lambda crop, face: np.zeros(10, dtype=np.float32))
+    monkeypatch.setattr(fr_module, "save_snapshot", lambda camera_id, frame: "/tmp/fake.jpg")
+    monkeypatch.setattr(fr_module.backend_client, "create_snapshot", lambda payload: {"id": "snap-1"})
+    monkeypatch.setattr(fr_module.backend_client, "recognize_face", lambda payload: recognize_result)
+
+
+def test_identity_for_returns_none_when_never_recognized():
+    recognizer = FaceRecognizer("cam-1")
+    assert recognizer.identity_for(42) is None
+
+
+def test_identity_for_tracks_a_recognized_result(monkeypatch):
+    _mock_recognition_pipeline(monkeypatch, {"recognition_status": "RECOGNIZED", "person_id": "person-123", "person_name": "Jane Doe", "confidence_score": 0.94})
+
+    recognizer = FaceRecognizer("cam-1")
+    recognizer.maybe_recognize({"face_recognition_enabled": True}, _frame(), 7, _person_detection(), (0.25, 0.35), [])
+
+    identity = recognizer.identity_for(7)
+    assert identity == {"person_id": "person-123", "person_name": "Jane Doe", "confidence_score": 0.94}
+
+
+def test_identity_for_does_not_track_unknown_results(monkeypatch):
+    _mock_recognition_pipeline(monkeypatch, {"recognition_status": "UNKNOWN", "person_id": None, "person_name": None, "confidence_score": 0.0})
+
+    recognizer = FaceRecognizer("cam-1")
+    recognizer.maybe_recognize({"face_recognition_enabled": True}, _frame(), 7, _person_detection(), (0.25, 0.35), [])
+
+    assert recognizer.identity_for(7) is None
+
+
+def test_identity_for_expires_after_freshness_window(monkeypatch):
+    _mock_recognition_pipeline(monkeypatch, {"recognition_status": "RECOGNIZED", "person_id": "person-123", "person_name": "Jane Doe", "confidence_score": 0.94})
+
+    recognizer = FaceRecognizer("cam-1")
+    recognizer.maybe_recognize({"face_recognition_enabled": True}, _frame(), 7, _person_detection(), (0.25, 0.35), [])
+    assert recognizer.identity_for(7) is not None
+
+    # Age the stored entry past the freshness window directly, rather than
+    # monkeypatching time.time() globally (which would also affect the cooldown check).
+    seen_at, identity = recognizer._known_identities[7]
+    recognizer._known_identities[7] = (seen_at - IDENTITY_FRESHNESS_SECONDS - 1, identity)
+
+    assert recognizer.identity_for(7) is None

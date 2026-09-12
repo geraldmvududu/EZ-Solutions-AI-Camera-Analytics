@@ -158,6 +158,33 @@ one discovery cycle, no restart needed.
 5. Draw a `FACE_DETECTION` or `FACE_EXCLUSION` zone on **Zones & Tripwires** to
    restrict where on that camera's frame recognition runs at all.
 
+### Flag an enrolled person's violation (e.g. jumping a gate) as a case file
+
+This is the same tripwire/intrusion-zone detection the platform already had, but now
+correlated with facial recognition: if the person crossing a tripwire or entering a
+restricted zone was recognized within the last few minutes, the platform automatically
+opens a real **Incident** — the "case file" you can click open and work.
+
+1. Complete the facial-recognition quickstart above (person enrolled, camera has
+   Facial Recognition enabled) on the same camera.
+2. On **Zones & Tripwires**, draw a regular tripwire (2 points) directly across the
+   gate the person would cross — not a `FACE_DETECTION`/`FACE_EXCLUSION` zone, an
+   ordinary one, exactly as described earlier in "Draw a zone, tripwire, or privacy
+   mask". An `INTRUSION` zone around a restricted area works the same way.
+3. When that enrolled person crosses it, the platform reports a real
+   `TRIPWIRE_VIOLATION` (or `INTRUSION_DETECTED`) event carrying their identity —
+   nothing to configure for this part, it's automatic once both the tripwire and
+   facial recognition exist on the same camera.
+4. Go to **Incidents** — a new entry appears titled `<Person> — Tripwire Violation at
+   <Camera>` (CRITICAL severity), with a description naming the person, the camera,
+   and the recognition confidence. Click **Open** to see the full description, the
+   linked Alert (real evidence — its snapshot, if one was captured), and set a status
+   (OPEN → INVESTIGATING → CONTAINED → RESOLVED → CLOSED) with resolution notes.
+5. This is a real, automated **correlation** of two independent signals (who they are,
+   and that they crossed a boundary) by camera/tracking — not a claim that facial
+   recognition itself proves the violation. The generated description says so
+   explicitly, and always review the linked evidence before treating it as confirmed.
+
 ### 1.11 Logs
 
 ```bash
@@ -266,8 +293,8 @@ python -m app.main
 ## 4. Testing
 
 ```bash
-cd backend && .venv/bin/pytest -q   # 77 tests, including the Facial Recognition module
-cd ai-engine && .venv/bin/pytest -q # 32 tests, including FaceRecognizer
+cd backend && .venv/bin/pytest -q   # 86 tests, including Facial Recognition and the violation-incident correlation
+cd ai-engine && .venv/bin/pytest -q # 36 tests, including FaceRecognizer
 cd frontend && npm run build      # type-checks + production build
 cd mobile && npx tsc --noEmit     # type-checks
 ```
