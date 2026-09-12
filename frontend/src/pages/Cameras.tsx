@@ -172,8 +172,13 @@ export function CamerasPage() {
 
   async function handleDelete(id: string) {
     if (!confirm("Delete this camera? This cannot be undone.")) return;
-    await camerasApi.deleteCamera(id);
-    load();
+    setError(null);
+    try {
+      await camerasApi.deleteCamera(id);
+      load();
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : "Failed to delete camera");
+    }
   }
 
   return (

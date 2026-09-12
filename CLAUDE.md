@@ -336,6 +336,22 @@ limitation 13), `FACE_PATH` (`/data/faces`, enrolled-photo storage).
   pointed at `/data/uploads/...` failed with "Could not open video source" and the
   camera stayed OFFLINE forever. Fixed by adding the mount (read-only, since ai-engine
   never writes there).
+- **Deleting a camera with real activity against it** (found live, via the user
+  reporting "the Delete button is not working") was another instance of the same
+  SQLite-vs-Postgres gap as the circular-FK bug above: `delete_camera` did a naive
+  `db.delete(camera); db.commit()`, which "worked" in every local test (SQLite never
+  enforced the foreign keys pointing at `cameras.id`) but silently failed on Postgres
+  once the camera had any real events/detections/zones/alerts/etc. — an unhandled
+  `IntegrityError` the frontend's `handleDelete` had no try/catch around, so the
+  button visibly did nothing. Fixed by explicitly cleaning up every dependent table in
+  FK-safe order (nulling the circular Event/Detection/Snapshot cross-references first,
+  same technique as the migration fix), removing the now-orphaned snapshot/recording
+  files from disk, and unscoping (not deleting) any `AIRule` that targeted the camera.
+  Also added error handling to the frontend's delete button so a future failure shows
+  a message instead of silently doing nothing. Covered by
+  `tests/test_camera_delete_cascade.py`, which builds real dependent rows for every
+  affected table (not just an empty camera) and asserts they're actually gone
+  afterward — not merely that the request didn't crash.
 - Full auth flow (login/refresh/logout) against a real backend + real frontend in a
   browser.
 - RBAC enforcement: VIEWER blocked (403) from camera/user management; ADMIN allowed.

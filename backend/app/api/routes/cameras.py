@@ -1,3 +1,4 @@
+import os
 import socket
 import uuid
 from collections.abc import AsyncIterator
@@ -15,8 +16,17 @@ from app.core.deps import require_internal_service, require_permission, tenant_f
 from app.core.permissions import Permissions
 from app.core.security import decrypt_secret, decode_access_token, encrypt_secret
 from app.database import get_db
-from app.models.camera import Camera, CameraSourceType
+from app.models.alert import Alert
+from app.models.camera import Camera, CameraSourceType, CameraStream
+from app.models.detection import Detection
+from app.models.event import Event
+from app.models.face_recognition_event import FaceRecognitionEvent
+from app.models.recording import Recording
+from app.models.rule import AIRule
+from app.models.snapshot import Snapshot
+from app.models.tripwire import Tripwire
 from app.models.user import User
+from app.models.zone import Zone
 from app.schemas.camera import CameraCreate, CameraResponse, CameraUpdate
 
 router = APIRouter(prefix="/cameras", tags=["cameras"])
@@ -151,9 +161,55 @@ def delete_camera(
     db: Session = Depends(get_db),
     user: User = Depends(require_permission(Permissions.MANAGE_CAMERAS)),
 ) -> None:
+    """Deleting a camera with real activity against it (events, detections, zones,
+    recordings...) used to raise an unhandled IntegrityError on Postgres — SQLite
+    (used in local tests) never enforces the foreign keys pointing at cameras.id, so
+    `db.delete(camera)` alone "worked" in every test run but failed for real once a
+    camera actually had dependent rows. Every dependent table is cleaned up explicitly
+    here, in an order that respects the circular Event/Detection/Snapshot FK
+    relationship (see app/models/detection.py's comment) by nulling those cross-
+    references out before deleting any of the three. AIRule is the one exception —
+    a rule outlives the camera it was scoped to, just unscoped (camera_id -> NULL),
+    since deleting someone's configured rule as a side effect of deleting a camera
+    would be a surprising, unrelated data loss."""
     camera = _get_owned_camera(db, camera_id, user)
+
+    snapshot_paths = [
+        row[0] for row in db.query(Snapshot.file_path).filter(Snapshot.camera_id == camera_id).all()
+    ]
+    recording_paths = [
+        row[0] for row in db.query(Recording.file_path).filter(Recording.camera_id == camera_id).all()
+    ]
+
+    db.query(Detection).filter(Detection.camera_id == camera_id).update(
+        {"snapshot_id": None, "recording_id": None}, synchronize_session=False
+    )
+    db.query(Event).filter(Event.camera_id == camera_id).update(
+        {"detection_id": None, "snapshot_id": None, "recording_id": None}, synchronize_session=False
+    )
+    db.query(Snapshot).filter(Snapshot.camera_id == camera_id).update({"event_id": None}, synchronize_session=False)
+
+    db.query(FaceRecognitionEvent).filter(FaceRecognitionEvent.camera_id == camera_id).delete(synchronize_session=False)
+    db.query(Alert).filter(Alert.camera_id == camera_id).delete(synchronize_session=False)
+    db.query(Detection).filter(Detection.camera_id == camera_id).delete(synchronize_session=False)
+    db.query(Snapshot).filter(Snapshot.camera_id == camera_id).delete(synchronize_session=False)
+    db.query(Recording).filter(Recording.camera_id == camera_id).delete(synchronize_session=False)
+    db.query(Event).filter(Event.camera_id == camera_id).delete(synchronize_session=False)
+    db.query(Zone).filter(Zone.camera_id == camera_id).delete(synchronize_session=False)
+    db.query(Tripwire).filter(Tripwire.camera_id == camera_id).delete(synchronize_session=False)
+    db.query(CameraStream).filter(CameraStream.camera_id == camera_id).delete(synchronize_session=False)
+    db.query(AIRule).filter(AIRule.camera_id == camera_id).update({"camera_id": None}, synchronize_session=False)
+
     db.delete(camera)
     db.commit()
+
+    for path in snapshot_paths + recording_paths:
+        try:
+            if path and os.path.exists(path):
+                os.remove(path)
+        except OSError:
+            pass  # best-effort — a missing/locked file must not block the camera delete that already committed
+
     log_action(
         db, action="CAMERA_DELETED", tenant_id=user.tenant_id, user_id=user.id,
         resource_type="camera", resource_id=str(camera_id),
