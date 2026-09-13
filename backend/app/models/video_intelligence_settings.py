@@ -15,6 +15,11 @@ class VideoIntelligenceSettings(Base, UUIDPKMixin, TimestampMixin, TenantScopedM
     gate_jumping_enabled: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     tailgating_enabled: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     restricted_area_enabled: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    # AI Video Intelligence Phase 2 (section 6) — tenant-wide kill switch, same family
+    # as the three above. Has no effect on a camera without
+    # Camera.multi_class_detection_enabled, since HOG never emits BACKPACK/BAG/SUITCASE
+    # detections for the ASSET_ZONE check to see.
+    theft_detection_enabled: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     min_confidence: Mapped[float] = mapped_column(Float, default=0.6, nullable=False)
     pre_event_seconds: Mapped[int] = mapped_column(Integer, default=30, nullable=False)
     post_event_seconds: Mapped[int] = mapped_column(Integer, default=30, nullable=False)

@@ -25,6 +25,7 @@ export interface CameraCreatePayload {
   face_recognition_threshold?: number;
   face_operating_hours_start?: string;
   face_operating_hours_end?: string;
+  multi_class_detection_enabled?: boolean;
 }
 
 export const listCameras = () => apiRequest<Camera[]>("/api/cameras");

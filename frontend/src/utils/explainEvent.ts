@@ -48,6 +48,15 @@ export function explainEvent(event: EventItem): string {
         "Review the linked evidence before treating this as a confirmed violation.",
       ].filter(Boolean).join(" ");
     }
+    case "POTENTIAL_THEFT_DETECTED": {
+      const objectType = m.object_type;
+      const threshold = m.threshold_seconds;
+      return [
+        `A${typeof objectType === "string" ? ` ${objectType.toLowerCase()}` : "n object"} that had been present in a monitored area${typeof threshold === "number" ? ` for at least ${threshold} seconds` : ""} was removed from the area.`,
+        identityClause(m),
+        "This is an object-class-detection + zone dwell/exit heuristic, not a trained theft-behavior classifier — review the linked evidence before treating this as confirmed.",
+      ].filter(Boolean).join(" ");
+    }
     case "LOITERING_DETECTED": {
       const threshold = m.threshold_seconds;
       return `A person remained in a monitored zone${typeof threshold === "number" ? ` for at least ${threshold} seconds` : ""} without leaving, exceeding the configured loitering threshold.`;

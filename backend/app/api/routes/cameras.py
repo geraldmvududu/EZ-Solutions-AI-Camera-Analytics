@@ -77,6 +77,7 @@ def list_active_cameras_internal(db: Session = Depends(get_db)) -> list[CameraIn
         response.gate_jumping_enabled = vi_settings.gate_jumping_enabled
         response.tailgating_enabled = vi_settings.tailgating_enabled
         response.restricted_area_enabled = vi_settings.restricted_area_enabled
+        response.theft_detection_enabled = vi_settings.theft_detection_enabled
         results.append(response)
     return results
 
@@ -136,6 +137,7 @@ def create_camera(
         face_recognition_threshold=payload.face_recognition_threshold,
         face_operating_hours_start=payload.face_operating_hours_start,
         face_operating_hours_end=payload.face_operating_hours_end,
+        multi_class_detection_enabled=payload.multi_class_detection_enabled,
     )
     db.add(camera)
     db.commit()

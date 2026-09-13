@@ -1,4 +1,18 @@
-opencv-python-headless==4.10.0.84
+# AI Video Intelligence Phase 2 note: this used to be opencv-python-headless.
+# ultralytics depends on opencv-python (the GUI-capable build) by package name, and
+# pip has no notion that opencv-python-headless satisfies it — installing both in the
+# same environment silently corrupts the shared cv2 native module (discovered for
+# real: cv2.CascadeClassifier disappeared after adding ultralytics). Switched to the
+# non-headless build at the same pinned version instead; this codebase never calls a
+# GUI function (cv2.imshow etc.) so behavior is unchanged, and the Dockerfile already
+# installs libgl1/libglib2.0-0, which opencv-python needs to import at all.
+opencv-python==4.10.0.84
 numpy==2.1.3
 httpx==0.28.1
 pydantic-settings==2.7.0
+# AI Video Intelligence Phase 2 — real multi-class detection (YOLOv8n). Pulls in
+# torch as a transitive dependency (~311MB locally) — a real, disclosed Docker image
+# size increase, applied on every build regardless of whether any camera opts in
+# (Camera.multi_class_detection_enabled) since Docker images are static. See
+# CLAUDE.md "Known limitations" and app/detectors/yolo_detector.py.
+ultralytics==8.4.150

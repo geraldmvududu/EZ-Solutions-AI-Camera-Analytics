@@ -72,6 +72,14 @@ class Camera(Base, UUIDPKMixin, TimestampMixin, TenantScopedMixin):
     face_operating_hours_start: Mapped[str] = mapped_column(String(5), nullable=False, default="")
     face_operating_hours_end: Mapped[str] = mapped_column(String(5), nullable=False, default="")
 
+    # AI Video Intelligence Phase 2 (section 6) — opt-in per camera, mirrors the
+    # ai_enabled/face_recognition_enabled boolean pattern above. Existing cameras keep
+    # the cheap PERSON-only HOG detector unchanged by default; this switches
+    # ai-engine's build_detector() to YOLOv8n instead (real multi-class detection —
+    # required for ASSET_ZONE/theft detection to see anything at all — but heavier on
+    # CPU and pulls in a much larger torch/ultralytics dependency).
+    multi_class_detection_enabled: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+
     status: Mapped[CameraStatus] = mapped_column(Enum(CameraStatus), default=CameraStatus.OFFLINE, nullable=False)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     is_demo: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)

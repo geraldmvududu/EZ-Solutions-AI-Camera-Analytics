@@ -26,6 +26,12 @@ class EventType(str, enum.Enum):
     GATE_JUMPING_DETECTED = "GATE_JUMPING_DETECTED"
     TAILGATING_DETECTED = "TAILGATING_DETECTED"
     RESTRICTED_AREA_VIOLATION = "RESTRICTED_AREA_VIOLATION"
+    # AI Video Intelligence Phase 2 (section 6): fires only when a camera has a real
+    # multi-class detector enabled (Camera.multi_class_detection_enabled) — see
+    # worker.py's ASSET_ZONE branch and CLAUDE.md for the honest scope of this
+    # detection (backpack/handbag/suitcase only — COCO has no generic box/package
+    # class).
+    POTENTIAL_THEFT_DETECTED = "POTENTIAL_THEFT_DETECTED"
 
 
 class EventSeverity(str, enum.Enum):

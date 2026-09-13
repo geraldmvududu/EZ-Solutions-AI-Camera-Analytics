@@ -142,3 +142,36 @@ def test_internal_active_cameras_reflects_video_intelligence_tenant_kill_switch(
     assert camera["gate_jumping_enabled"] is False
     assert camera["tailgating_enabled"] is True  # default, untouched
     assert camera["restricted_area_enabled"] is True  # default, untouched
+
+
+def test_multi_class_detection_enabled_defaults_false_and_is_settable(client, admin_user):
+    """AI Video Intelligence Phase 2: per-camera opt-in into the real YOLOv8n
+    multi-class detector (mirrors ai_enabled/face_recognition_enabled)."""
+    token = login(client, admin_user.email)
+    created = client.post(
+        "/api/cameras", json={"name": "Front Gate", "source_type": "SIMULATED"}, headers=auth_headers(token)
+    ).json()
+    assert created["multi_class_detection_enabled"] is False
+
+    updated = client.patch(
+        f"/api/cameras/{created['id']}",
+        json={"multi_class_detection_enabled": True},
+        headers=auth_headers(token),
+    ).json()
+    assert updated["multi_class_detection_enabled"] is True
+
+
+def test_internal_active_cameras_reflects_multi_class_detection_and_theft_kill_switch(client, admin_user):
+    token = login(client, admin_user.email)
+    created = client.post(
+        "/api/cameras",
+        json={"name": "Front Gate", "source_type": "SIMULATED", "multi_class_detection_enabled": True},
+        headers=auth_headers(token),
+    ).json()
+    client.put("/api/video-intelligence-settings", json={"theft_detection_enabled": False}, headers=auth_headers(token))
+
+    resp = client.get("/api/cameras/internal/active", headers={"X-Internal-Token": "test-internal-token"})
+    assert resp.status_code == 200
+    camera = next(c for c in resp.json() if c["id"] == created["id"])
+    assert camera["multi_class_detection_enabled"] is True
+    assert camera["theft_detection_enabled"] is False

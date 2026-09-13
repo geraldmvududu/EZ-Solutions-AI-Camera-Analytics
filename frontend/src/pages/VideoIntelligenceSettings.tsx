@@ -44,12 +44,15 @@ export function VideoIntelligenceSettingsPage() {
           <div className="font-semibold text-slate-200 text-sm">Detection categories</div>
           <p className="text-xs text-slate-500">
             Each category also requires opting in per-tripwire/zone (Zones &amp; Tripwires page) — these are a
-            tenant-wide kill switch on top of that.
+            tenant-wide kill switch on top of that. Theft detection additionally requires the camera itself to have
+            "Multi-class object detection" enabled (Cameras page) — without it, the camera only ever sees people,
+            not backpacks/bags/suitcases.
           </p>
           {([
             ["gate_jumping_enabled", "Gate jump / climbing detection"],
             ["tailgating_enabled", "Tailgating detection"],
             ["restricted_area_enabled", "Restricted area detection"],
+            ["theft_detection_enabled", "Potential theft / unauthorized object removal"],
           ] as const).map(([field, label]) => (
             <label key={field} className="flex items-center gap-2 text-sm text-slate-300">
               <input
@@ -62,22 +65,18 @@ export function VideoIntelligenceSettingsPage() {
           ))}
 
           <div className="pt-2 space-y-2 opacity-50">
-            <div className="text-xs text-slate-500">Coming soon (needs a multi-class object detector / pose estimation — see documented limitations):</div>
+            <div className="text-xs text-slate-500">Coming soon — see documented limitations:</div>
             <label className="flex items-center gap-2 text-sm text-slate-400">
               <input type="checkbox" disabled />
-              Potential theft / unauthorized object removal
+              Abandoned object detection (not yet implemented)
             </label>
             <label className="flex items-center gap-2 text-sm text-slate-400">
               <input type="checkbox" disabled />
-              Abandoned object detection
+              Person falling / safety detection (needs pose estimation)
             </label>
             <label className="flex items-center gap-2 text-sm text-slate-400">
               <input type="checkbox" disabled />
-              Person falling / safety detection
-            </label>
-            <label className="flex items-center gap-2 text-sm text-slate-400">
-              <input type="checkbox" disabled />
-              PPE detection
+              PPE detection (needs a specialized model this environment can't obtain)
             </label>
           </div>
         </div>

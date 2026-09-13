@@ -54,6 +54,7 @@ _ALWAYS_INCIDENT_EVENT_TYPES = {
     EventType.GATE_JUMPING_DETECTED,
     EventType.TAILGATING_DETECTED,
     EventType.RESTRICTED_AREA_VIOLATION,
+    EventType.POTENTIAL_THEFT_DETECTED,
 }
 
 # compute_risk_score's weights (spec section 19) — deliberately simple and documented
@@ -123,6 +124,7 @@ _ALWAYS_INCIDENT_TITLE = {
     EventType.GATE_JUMPING_DETECTED: "Possible Gate Jumping",
     EventType.TAILGATING_DETECTED: "Possible Tailgating",
     EventType.RESTRICTED_AREA_VIOLATION: "Restricted Area Violation",
+    EventType.POTENTIAL_THEFT_DETECTED: "Potential Theft / Unauthorized Object Removal",
 }
 
 
@@ -146,6 +148,16 @@ def _build_always_incident_description(event: Event, camera: Camera, person: Per
             f"A person crossed a controlled access point on camera '{camera.name}' at {when}{window_note} another "
             f"person's crossing, without a separate authorized entry in between. {identity} This platform has no "
             f"access-control-system integration, so this is video-only evidence — review the linked footage "
+            f"before treating this as confirmed."
+        )
+    if event.event_type == EventType.POTENTIAL_THEFT_DETECTED:
+        object_type = event.event_metadata.get("object_type", "object")
+        threshold = event.event_metadata.get("threshold_seconds")
+        threshold_note = f" for at least {threshold} seconds" if threshold is not None else ""
+        return (
+            f"A {object_type.lower()} that had been present in a monitored area on camera '{camera.name}'"
+            f"{threshold_note} was removed from the area at {when}. {identity} This is an object-class-detection "
+            f"+ zone dwell/exit heuristic, not a trained theft-behavior classifier — review the linked evidence "
             f"before treating this as confirmed."
         )
     # RESTRICTED_AREA_VIOLATION

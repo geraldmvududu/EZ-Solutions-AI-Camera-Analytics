@@ -12,6 +12,12 @@
       "runtimeExecutable": "backend/.venv/Scripts/python.exe",
       "runtimeArgs": ["-m", "uvicorn", "app.main:app", "--app-dir", "backend", "--port", "8001"],
       "port": 8001
+    },
+    {
+      "name": "ai-engine",
+      "runtimeExecutable": "ai-engine/.venv/Scripts/python.exe",
+      "runtimeArgs": ["-c", "import os,runpy; os.chdir('ai-engine'); os.environ.setdefault('API_URL','http://localhost:8001'); runpy.run_module('app.main', run_name='__main__')"],
+      "port": 8090
     }
   ]
 }

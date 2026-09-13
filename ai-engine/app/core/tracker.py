@@ -56,6 +56,14 @@ class CentroidTracker:
         for track_id, track in list(self._tracks.items()):
             best_idx, best_dist = None, self._max_distance
             for idx in unmatched_detections:
+                # Only match within the same object_type — otherwise a multi-class
+                # detector (YoloDetector) can hand a PERSON track a nearby BACKPACK
+                # detection (or vice versa) purely because they're close together,
+                # silently corrupting both track identity and object_type mid-track.
+                # HOGPersonDetector never exercised this path since it only ever
+                # emits PERSON.
+                if detections[idx].object_type != track.detection.object_type:
+                    continue
                 dist = self._distance(track.centroid, Track._centroid(detections[idx]))
                 if dist < best_dist:
                     best_idx, best_dist = idx, dist

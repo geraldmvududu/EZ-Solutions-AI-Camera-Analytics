@@ -1,6 +1,6 @@
 import { apiRequest } from "./client";
 
-export type ZoneType = "INTRUSION" | "PRIVACY" | "LOITERING" | "FACE_DETECTION" | "FACE_EXCLUSION" | "RESTRICTED_AREA";
+export type ZoneType = "INTRUSION" | "PRIVACY" | "LOITERING" | "FACE_DETECTION" | "FACE_EXCLUSION" | "RESTRICTED_AREA" | "ASSET_ZONE";
 export type TripwireDirection = "ENTERING" | "EXITING" | "BOTH";
 
 export interface Zone {

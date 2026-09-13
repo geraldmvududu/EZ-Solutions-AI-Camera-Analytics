@@ -31,6 +31,7 @@ class CameraCreate(BaseModel):
     face_recognition_threshold: float | None = Field(default=None, ge=0.0, le=1.0)
     face_operating_hours_start: str = ""
     face_operating_hours_end: str = ""
+    multi_class_detection_enabled: bool = False
 
 
 class CameraUpdate(BaseModel):
@@ -56,6 +57,7 @@ class CameraUpdate(BaseModel):
     face_recognition_threshold: float | None = None
     face_operating_hours_start: str | None = None
     face_operating_hours_end: str | None = None
+    multi_class_detection_enabled: bool | None = None
 
 
 class CameraResponse(BaseModel):
@@ -83,6 +85,7 @@ class CameraResponse(BaseModel):
     face_recognition_threshold: float | None
     face_operating_hours_start: str
     face_operating_hours_end: str
+    multi_class_detection_enabled: bool
     status: CameraStatus
     is_active: bool
     is_demo: bool
@@ -116,3 +119,4 @@ class CameraInternalResponse(CameraResponse):
     gate_jumping_enabled: bool = True
     tailgating_enabled: bool = True
     restricted_area_enabled: bool = True
+    theft_detection_enabled: bool = True

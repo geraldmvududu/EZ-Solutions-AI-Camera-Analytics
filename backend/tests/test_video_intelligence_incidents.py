@@ -97,6 +97,62 @@ def test_restricted_area_violation_creates_incident(client, admin_user):
     assert "at least 10 seconds" in incidents[0]["description"]
 
 
+def test_potential_theft_creates_incident_without_a_recognized_person(client, admin_user):
+    token = login(client, admin_user.email)
+    cam = client.post("/api/cameras", json={"name": "Display Case", "source_type": "SIMULATED"}, headers=auth_headers(token)).json()
+
+    resp = client.post(
+        "/api/events",
+        json={
+            "camera_id": cam["id"], "event_type": "POTENTIAL_THEFT_DETECTED", "severity": "HIGH",
+            "occurred_at": "2026-01-01T12:00:00Z",
+            "event_metadata": {"object_type": "BACKPACK", "tracking_id": 1, "threshold_seconds": 10},
+        },
+        headers=INTERNAL_HEADERS,
+    )
+    assert resp.status_code == 201, resp.text
+
+    incidents = client.get("/api/incidents", headers=auth_headers(token)).json()
+    assert len(incidents) == 1
+    incident = incidents[0]
+    assert "Unknown Person" in incident["title"]
+    assert incident["incident_type"] == "POTENTIAL_THEFT_DETECTED"
+    assert incident["requires_human_review"] is True
+    assert incident["risk_score"] is not None
+    assert "backpack" in incident["description"]
+    assert "at least 10 seconds" in incident["description"]
+    assert "not a trained theft-behavior classifier" in incident["description"]
+    assert "Unknown Person" in incident["description"]
+
+
+def test_potential_theft_creates_incident_with_a_recognized_nearby_person(client, db_session, admin_user, tenant):
+    token = login(client, admin_user.email)
+    cam = client.post("/api/cameras", json={"name": "Display Case", "source_type": "SIMULATED"}, headers=auth_headers(token)).json()
+    person = _make_person(db_session, tenant)
+
+    resp = client.post(
+        "/api/events",
+        json={
+            "camera_id": cam["id"], "event_type": "POTENTIAL_THEFT_DETECTED", "severity": "HIGH",
+            "occurred_at": "2026-01-01T12:00:00Z",
+            "event_metadata": {
+                "object_type": "SUITCASE", "tracking_id": 2, "threshold_seconds": 15,
+                "person_id": str(person.id), "person_recognition_confidence": 0.88,
+            },
+        },
+        headers=INTERNAL_HEADERS,
+    )
+    assert resp.status_code == 201
+
+    incidents = client.get("/api/incidents", headers=auth_headers(token)).json()
+    assert len(incidents) == 1
+    incident = incidents[0]
+    assert "Jane Doe" in incident["title"]
+    assert incident["incident_type"] == "POTENTIAL_THEFT_DETECTED"
+    assert "Jane Doe" in incident["description"]
+    assert "suitcase" in incident["description"]
+
+
 def test_compute_risk_score_severity_base():
     business_start, business_end = "07:00", "18:00"
     noon = datetime(2026, 1, 1, 12, 0, tzinfo=timezone.utc)

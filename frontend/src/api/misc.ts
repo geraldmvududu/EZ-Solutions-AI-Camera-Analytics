@@ -107,6 +107,7 @@ export interface VideoIntelligenceSettings {
   gate_jumping_enabled: boolean;
   tailgating_enabled: boolean;
   restricted_area_enabled: boolean;
+  theft_detection_enabled: boolean;
   min_confidence: number;
   pre_event_seconds: number;
   post_event_seconds: number;

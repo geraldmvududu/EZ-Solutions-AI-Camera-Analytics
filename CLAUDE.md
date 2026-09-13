@@ -254,6 +254,91 @@ is real but PERSON-only), person-falling/safety detection (needs pose estimation
 and PPE/fighting/crowd-panic detection (need specialized models this environment
 can't obtain).
 
+**AI Video Intelligence, Phase 2 — real multi-class detection + potential theft
+detection** (`ai-engine/app/detectors/yolo_detector.py`,
+`ai-engine/app/core/object_tracking.py`): adds the one real capability Phase 1
+explicitly deferred — seeing objects other than PERSON at all. Two honest scope limits,
+disclosed here rather than discovered later: **(a)** COCO (the dataset YOLOv8n is
+trained on) has no generic "box"/"package" class — real theft detection here means "a
+`backpack`/`handbag`/`suitcase` was removed from a monitored area," not literal
+cardboard-box/package tracking, and there is no feasible way to train a custom "box"
+class in this environment. **(b)** Adding `ultralytics` (which pulls in `torch`) is a
+real, non-trivial Docker/venv size increase (~311MB for torch alone, measured locally)
+that applies to every build regardless of whether any camera actually opts in, since
+Docker images are static. A related, real packaging gotcha found *while* adding this:
+`ultralytics` depends on the PyPI package `opencv-python` (GUI-capable), and pip has no
+notion that the already-installed `opencv-python-headless` satisfies it — installing
+both in the same environment silently corrupts the shared `cv2` native module
+(`cv2.CascadeClassifier` disappeared, breaking face detection). Fixed by switching
+`requirements.txt` from `opencv-python-headless` to `opencv-python` at the same pinned
+version — this codebase never calls a GUI function (`cv2.imshow` etc.), and the
+Dockerfile already installs `libgl1`/`libglib2.0-0`, which `opencv-python` needs to
+import at all.
+
+- `Camera.multi_class_detection_enabled` (mirrors `ai_enabled`/
+  `face_recognition_enabled`) opts a specific camera into `YoloDetector` in place of
+  the default `HOGPersonDetector` — existing cameras are unaffected. `YoloDetector`
+  lazily imports `ultralytics` inside `__init__` (a process running only HOG-only
+  cameras never pays torch's import cost) and loads `yolov8n.pt` from
+  `settings.model_path` (`./data/models`, the same already-mounted persistent Docker
+  volume used elsewhere) rather than a bare filename, so Ultralytics' own
+  missing-file download lands on the volume and survives container restarts instead
+  of re-downloading into an image-local cache. Real, unmocked verification this
+  session: `ultralytics==8.4.150` installs cleanly, downloads real weights (6.2MB)
+  over genuine internet access, runs real inference, and sustains ~6.9fps warmed-up
+  on this dev machine's CPU — comfortably above the platform's default `ai_fps=5`.
+- COCO class name → this platform's existing object-type vocabulary (already
+  anticipated verbatim in `Detection`'s docstring before this phase existed):
+  `person`→PERSON, `backpack`→BACKPACK, `handbag`→BAG, `suitcase`→SUITCASE, the
+  vehicle classes → CAR/TRUCK/BUS/MOTORCYCLE/BICYCLE, the 9 COCO animal classes →
+  ANIMAL. Everything else (chair, laptop, ...) is dropped.
+- **Real bug found and fixed while building this**: `CentroidTracker` (the same
+  nearest-centroid tracker every zone/tripwire feature already depends on) matched a
+  new detection to an existing track by distance alone — harmless while the only
+  detector was PERSON-only, but with a multi-class detector a backpack near a person
+  could steal that person's track (or vice versa), corrupting both track identity and
+  `object_type` mid-track. Fixed by requiring `object_type` to match before
+  considering a candidate for nearest-centroid association
+  (`ai-engine/tests/test_tracker.py::test_person_and_backpack_at_the_same_position_
+  stay_on_separate_tracks`).
+- `ZoneType.ASSET_ZONE` (a monitored asset area — shelf, display case, loading dock)
+  reuses `loitering_threshold_seconds` as "minimum seconds an object must be
+  continuously present before its removal counts as a violation," same reuse pattern
+  Phase 1 used for `RESTRICTED_AREA`. `ai-engine/app/core/object_tracking.py::
+  AssetZoneTracker` is a small, transparent, real heuristic — structurally similar to
+  `LoiteringTracker` but with inverted trigger semantics (fires on **exit** after
+  sufficient dwell, not on continued presence). Honest limitation: this only fires
+  while the object remains independently classifiable by the detector as it crosses
+  the zone boundary — an object that becomes occluded first (hidden under clothing,
+  placed inside another bag, put in a vehicle trunk) will not be caught, since at that
+  point the detector can no longer see it as a distinct BACKPACK/BAG/SUITCASE to
+  track.
+- `worker.py::_check_zones` gained a `POTENTIAL_THEFT_DETECTED` branch (`HIGH`
+  severity) gated on the zone's `ASSET_ZONE` type, the detection's object type being
+  one of the three monitored classes, and the tenant's new
+  `VideoIntelligenceSettings.theft_detection_enabled` kill switch. At the firing
+  moment, a new `_closest_person_track_id` helper looks for the nearest
+  currently-tracked PERSON (reusing `CentroidTracker`'s own default proximity scale)
+  and attaches that person's recognized identity via the existing
+  `_identity_metadata` helper *only* when they happen to also be a known face match —
+  never fabricated, and it's a best-effort "who was nearby," not a claim they took the
+  item. `violation_service.py`'s existing `_ALWAYS_INCIDENT_EVENT_TYPES` dispatch
+  path picks this event type up with zero new incident-creation code — same
+  `compute_risk_score`, `requires_human_review=True`, and deterministic (non-LLM)
+  description template convention as every other Phase 1 always-incident type.
+- Frontend: `ZonesEditor.tsx` gained the "Asset / Theft Monitoring Zone" option,
+  `Cameras.tsx` gained the "Multi-class object detection (YOLOv8n)" toggle (with an
+  inline CPU-cost/dependency note), and `VideoIntelligenceSettings.tsx`'s "Potential
+  theft" checkbox moved out of the disabled "Coming soon" block into a real, working
+  toggle. `Incidents.tsx`, the AI Video Intelligence dashboard, and the PDF report's
+  incident-type section needed zero changes — all three already group by
+  `incident_type` generically.
+
+Abandoned-object detection was deliberately **not** added alongside theft detection in
+this phase — it shares the same object-tracking foundation and would be a small
+addition, but the user asked specifically for gate-jumping and theft, and adding
+unrequested detection categories isn't this project's convention. See limitation 17.
+
 ## Development commands
 
 ```bash
@@ -276,7 +361,7 @@ cd ai-engine && python -m app.main
 ## Testing commands
 
 ```bash
-cd backend && pytest -q      # 133 tests: auth, RBAC, tenant isolation, camera CRUD
+cd backend && pytest -q      # 140 tests: auth, RBAC, tenant isolation, camera CRUD
                               # (including the delete cascade covering every dependent
                               # table), credential encryption, rule engine, analytics
                               # aggregates, report export, the Redis-backed rate limiter
@@ -300,11 +385,18 @@ cd backend && pytest -q      # 133 tests: auth, RBAC, tenant isolation, camera C
                               # compute_risk_score, VideoIntelligenceSettings CRUD +
                               # tenant isolation, the two internal evidence-clip
                               # endpoints and the query-token playback endpoint using
-                              # real temp files, and the PDF report's incident-type
-                              # section) — all against a real in-memory SQLite DB
+                              # real temp files, the PDF report's incident-type
+                              # section, and AI Video Intelligence Phase 2
+                              # (multi_class_detection_enabled CRUD + presence on
+                              # CameraInternalResponse, the ASSET_ZONE zone type,
+                              # theft_detection_enabled, and the always-incident path
+                              # for POTENTIAL_THEFT_DETECTED with/without a recognized
+                              # nearby person) — all against a real in-memory SQLite DB
                               # through the actual FastAPI app
-cd ai-engine && pytest -q    # 60 tests: centroid tracker, zone/tripwire geometry,
-                              # loitering timer, motion detection (real MOG2 background
+cd ai-engine && pytest -q    # 76 tests: centroid tracker (including type-aware
+                              # matching so a multi-class detector can't let a track
+                              # of one object_type steal another's), zone/tripwire
+                              # geometry, loitering timer, motion detection (real MOG2 background
                               # subtraction against synthetic frames), privacy-zone
                               # blurring, the discovery-loop config fingerprint, the
                               # FaceRecognizer pipeline (cooldown — including honoring a
@@ -319,8 +411,16 @@ cd ai-engine && pytest -q    # 60 tests: centroid tracker, zone/tripwire geometr
                               # graceful-failure path — subprocess mocked in these unit
                               # tests; the real ffmpeg binary itself is confirmed working
                               # end-to-end on the deployed Ubuntu VM, see "Verified
-                              # end-to-end"), and the gate-jump heuristic/tailgating
-                              # window logic (synthetic trajectories)
+                              # end-to-end"), the gate-jump heuristic/tailgating
+                              # window logic (synthetic trajectories), and AI Video
+                              # Intelligence Phase 2 (YoloDetector's COCO-class-to-
+                              # object_type mapping/confidence filtering — the
+                              # ultralytics.YOLO model itself mocked at the boundary,
+                              # same rationale as the ffmpeg subprocess mocking above —
+                              # AssetZoneTracker's dwell-then-exit logic, and the
+                              # CameraWorker._check_zones ASSET_ZONE wiring including
+                              # the nearby-person identity attribution, exercised
+                              # directly against a real CameraWorker instance)
 cd worker && pytest -q       # 6 tests: retention cleanup for recordings/snapshots/
                               # face-recognition-events/face-profiles against a real
                               # SQLite DB with a hand-crafted minimal schema — the
@@ -511,12 +611,25 @@ limitation 13), `FACE_PATH` (`/data/faces`, enrolled-photo storage).
    `GATE_JUMP_VELOCITY_RATIO` constants against real footage once deployed, and treat
    every `GATE_JUMPING_DETECTED` incident as `requires_human_review` (already the
    default).
-17. **Theft/unauthorized-object-removal and abandoned-object detection are not
-   implemented** (AI Video Intelligence Phase 2 backlog): both need tracking actual
-   objects (boxes, bags), and the current detector
-   (`ai-engine/app/detectors/hog_detector.py`) is real but PERSON-only — see
-   limitation 3. Adding a real multi-class detector (e.g. YOLOv8n) to unlock this is
-   scoped as a future phase, not faked with a person-only proxy.
+17. **Theft/unauthorized-object-removal detection (AI Video Intelligence Phase 2) is
+   implemented, with two real, disclosed scope limits.** First, COCO (the dataset the
+   new `YoloDetector` — `ai-engine/app/detectors/yolo_detector.py` — is trained on) has
+   no generic "box"/"package" class: detection covers `backpack`/`handbag`/`suitcase`
+   specifically, not literal cardboard boxes/packages, and there's no feasible way to
+   train a custom class for that in this environment. Second, the dwell-then-exit
+   heuristic (`ai-engine/app/core/object_tracking.py::AssetZoneTracker`) only fires
+   while the object stays independently classifiable as it crosses the monitored
+   zone's boundary — an item hidden under clothing, placed inside another bag, or put
+   in a vehicle trunk before that point will not be caught, since the detector can no
+   longer see it as a distinct object to track. It is opt-in per camera
+   (`Camera.multi_class_detection_enabled`, off by default — heavier CPU cost, real
+   `torch`/`ultralytics` dependency) and per zone (`ZoneType.ASSET_ZONE`). Also
+   real: switching from `opencv-python-headless` to `opencv-python` was necessary
+   because `ultralytics` depends on the latter by package name and installing both
+   silently corrupts the shared native `cv2` module — see the Architecture section.
+   **Abandoned-object detection remains not implemented** — it shares the same
+   object-tracking foundation and would be a comparatively small future addition, but
+   wasn't requested and so wasn't built speculatively.
 18. **Person-falling/lying-down/motionless safety detection is not implemented** (AI
    Video Intelligence Phase 3 backlog): needs real pose estimation, which this
    platform doesn't have. A bounding-box-only heuristic was deliberately not built
@@ -545,7 +658,7 @@ limitation 13), `FACE_PATH` (`/data/faces`, enrolled-photo storage).
 | 8. Multi-tenancy | Data model + isolation enforced and tested; no tenant self-signup UI |
 | 9. Production hardening (real TLS, Redis rate limit, perf) | Redis-backed rate limiting done; real-TLS automation done (`scripts/setup-letsencrypt.sh`, needs the user's own domain to run) |
 | 10. Facial Recognition & Identity Analytics | Phase 1 + Phase 2 done, tested, verified in a real browser — enroll/manage people, real detect→embed→match pipeline, recognition events feeding the existing event/alert/rule/notification/WebSocket pipeline, camera + zone config, human review, identified-person violation → auto-Incident, recordings linked to face/violation events with in-browser seekable playback, multi-frame confirmation, liveness (narrow scope, limitation 12), retention enforcement, and a CSV appearance-history export. Full drag-and-drop rules-builder UI is still out of scope (rules are managed via the existing generic Rules page) |
-| 11. AI Video Intelligence | Phase 1 done, tested, verified in a real browser — gate-jumping/climbing (heuristic), tailgating, and restricted-area detection extending the existing tripwire/zone pipeline; a real, transparent risk score; auto-created Incidents with a template-based (not LLM) AI summary; real ffmpeg-trimmed evidence clips; a dashboard and settings page; a PDF report section. Theft/abandoned-object detection (Phase 2, needs a multi-class detector) and fall detection (Phase 3, needs pose estimation) are deliberately not built yet — see limitations 17-19 |
+| 11. AI Video Intelligence | Phase 1 + Phase 2 done, tested, verified in a real browser — gate-jumping/climbing (heuristic), tailgating, restricted-area, and now potential-theft detection (real YOLOv8n multi-class detector, opt-in per camera; backpack/handbag/suitcase removal from a monitored zone) extending the existing tripwire/zone pipeline; a real, transparent risk score; auto-created Incidents with a template-based (not LLM) AI summary; real ffmpeg-trimmed evidence clips; a dashboard and settings page; a PDF report section. Abandoned-object detection (not requested) and fall detection (Phase 3, needs pose estimation) are deliberately not built yet — see limitations 17-19 |
 
 ## Verified end-to-end (not just "should work")
 
@@ -741,3 +854,36 @@ limitation 13), `FACE_PATH` (`/data/faces`, enrolled-photo storage).
   `tailgating_enabled`, both confirmed via direct DOM inspection after a fresh page
   load). `cd backend && pytest -q` (133) and `cd ai-engine && pytest -q` (60) both
   green, `cd frontend && npm run build` clean throughout.
+- **AI Video Intelligence Phase 2 (theft detection), end-to-end in a real browser
+  against a real (unmocked) backend and a real running ai-engine.** Created a real
+  camera with `multi_class_detection_enabled` checked through the Cameras page UI and
+  confirmed the new "Multi-class" column showed ON. Started the actual `ai-engine`
+  process (not mocked) against it — confirmed via its own logs that the camera's
+  worker booted cleanly, meaning `YoloDetector.__init__` genuinely loaded the
+  already-downloaded `yolov8n.pt` from the mounted `data/models` path with no import
+  or load error, and that its live MJPEG feed rendered correctly in the Zones &
+  Tripwires editor (a real moving synthetic frame, timestamp overlay ticking).
+  Drew a real `ASSET_ZONE` polygon ("Display Case") by clicking points against that
+  live feed and saved it through the real API. Confirmed the AI Video Intelligence
+  Settings page's "Potential theft / unauthorized object removal" checkbox is now a
+  real, enabled control (no longer in the disabled "Coming soon" block) and persists.
+  Because a `SIMULATED` camera's synthetic frame (a plain moving rectangle) will never
+  be classified as a real backpack/handbag/suitcase by a genuine COCO-trained model —
+  there's no fixture in this environment that would — the actual firing path was
+  verified the same way Phase 1's identified-person-violation path was: posted a real
+  `POTENTIAL_THEFT_DETECTED` event via the internal API (internal token, as ai-engine's
+  `worker.py::_check_zones` would after a real `AssetZoneTracker` exit-after-dwell
+  match) and confirmed in the browser that a real Incident was auto-created with the
+  exact expected values — title `"Potential Theft / Unauthorized Object Removal —
+  Unknown Person at Theft Test Zone Cam"`, `risk_score: 50` (matching
+  `compute_risk_score` by hand: 30 for HIGH + 20 for the after-hours timestamp used),
+  `requires_human_review: true`, and the exact deterministic description including the
+  "not a trained theft-behavior classifier" caveat. Also opened the same event from
+  the Events page and confirmed `explainEvent.ts`'s new `POTENTIAL_THEFT_DETECTED`
+  case renders the matching plain-language explanation and raw metadata table. This is
+  the same honest verification boundary as limitation 15's ffmpeg-transcode
+  disclosure: the real detector, real tracker, real API, and real UI were all
+  exercised for real; only the specific "a real backpack appears in a camera frame"
+  trigger was simulated via a seeded event rather than genuine pixels, since no such
+  fixture exists in this environment. `cd backend && pytest -q` (140),
+  `cd ai-engine && pytest -q` (76), and `cd frontend && npm run build` all green.

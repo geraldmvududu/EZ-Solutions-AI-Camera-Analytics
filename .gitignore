@@ -23,6 +23,15 @@ data/faces/*
 !data/faces/.gitkeep
 backups/
 
+# ai-engine's own data/ dir when run directly from its own directory (the documented
+# `cd ai-engine && python -m app.main` local dev loop, not Docker) — the patterns
+# above are anchored to the repo root and don't cover this nested path. Discovered for
+# real: a local AI Video Intelligence Phase 2 verification run left a real
+# yolov8n.pt weight file and would have left real recordings/snapshots here,
+# untracked by anything above.
+ai-engine/data/*
+!ai-engine/data/.gitkeep
+
 # Large binary assets
 models/*.pt
 models/*.onnx

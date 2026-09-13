@@ -236,6 +236,30 @@ existing event type (including the new ones above) with a `time_start`/`time_end
 window covering off-hours, or `days_of_week` — the existing rule engine already
 supports this.
 
+### Detect potential theft (backpack/handbag/suitcase removal)
+
+AI Video Intelligence Phase 2 adds real multi-class object detection (YOLOv8n) so the
+system can see items other than people. Two honest limits before you start: COCO (the
+model's training data) has no generic "box"/"package" class — this covers
+backpack/handbag/suitcase specifically — and it only catches removal while the item
+stays visually classifiable as it crosses the monitored zone's edge (an item hidden
+under clothing or in another bag/car trunk beforehand won't be caught). See `CLAUDE.md`
+limitation 17 for the full detail.
+
+1. On the **Cameras** page, check **Multi-class object detection (YOLOv8n)** on the
+   camera watching the area you want to protect — this is opt-in per camera since it's
+   heavier on CPU than the default person-only detector, and required for any of the
+   below to see anything at all.
+2. On **Zones & Tripwires**, draw an **Asset / Theft Monitoring Zone** around the area
+   (a shelf, display case, loading dock).
+3. Make sure **Potential theft / unauthorized object removal** is checked on **AI Video
+   Intelligence Settings** (on by default) — same tenant-wide kill switch as the other
+   categories.
+4. When a backpack/bag/suitcase that dwelled in the zone long enough is then observed
+   leaving it, a real **Incident** opens automatically (same risk-score/evidence-clip/
+   human-review treatment as gate-jumping/tailgating/restricted-area above), noting
+   nearby identified people only when a genuine face match exists.
+
 ### 1.11 Logs
 
 ```bash
@@ -346,12 +370,14 @@ python -m app.main
 ## 4. Testing
 
 ```bash
-cd backend && .venv/bin/pytest -q   # 133 tests, including Facial Recognition, the
+cd backend && .venv/bin/pytest -q   # 140 tests, including Facial Recognition, the
                                      # violation-incident correlation, recording linkage,
                                      # and AI Video Intelligence (gate-jumping/tailgating/
-                                     # restricted-area, risk scoring, evidence clips)
-cd ai-engine && .venv/bin/pytest -q # 60 tests, including FaceRecognizer, SegmentRecorder,
-                                     # and the gate-jump/tailgating heuristics
+                                     # restricted-area/theft, risk scoring, evidence clips)
+cd ai-engine && .venv/bin/pytest -q # 76 tests, including FaceRecognizer, SegmentRecorder,
+                                     # the gate-jump/tailgating heuristics, the real
+                                     # multi-class YoloDetector's class mapping, and the
+                                     # AssetZoneTracker theft-detection heuristic
 cd worker && .venv/bin/pytest -q    # 6 tests, retention cleanup incl. face data
 cd frontend && npm run build      # type-checks + production build
 cd mobile && npx tsc --noEmit     # type-checks

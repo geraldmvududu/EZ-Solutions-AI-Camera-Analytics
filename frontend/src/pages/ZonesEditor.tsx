@@ -184,6 +184,7 @@ export function ZonesEditorPage() {
                   FACE_DETECTION: "#3b82f6",
                   FACE_EXCLUSION: "#64748b",
                   RESTRICTED_AREA: "#a855f7",
+                  ASSET_ZONE: "#22c55e",
                 };
                 const stroke = colors[z.zone_type] || "#ef4444";
                 return (
@@ -244,6 +245,7 @@ export function ZonesEditorPage() {
                   <option value="PRIVACY">Privacy (blurs this region)</option>
                   <option value="LOITERING">Loitering</option>
                   <option value="RESTRICTED_AREA">Restricted Area (AI Video Intelligence)</option>
+                  <option value="ASSET_ZONE">Asset / Theft Monitoring Zone (AI Video Intelligence)</option>
                   <option value="FACE_DETECTION">Face Detection Zone (recognize only here)</option>
                   <option value="FACE_EXCLUSION">Face Exclusion Zone (never recognize here)</option>
                 </select>

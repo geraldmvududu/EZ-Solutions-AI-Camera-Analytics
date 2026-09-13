@@ -12,6 +12,7 @@ def test_get_settings_seeds_defaults_on_first_use(client, admin_user):
     assert body["gate_jumping_enabled"] is True
     assert body["tailgating_enabled"] is True
     assert body["restricted_area_enabled"] is True
+    assert body["theft_detection_enabled"] is True
     assert body["pre_event_seconds"] == 30
     assert body["post_event_seconds"] == 30
     assert body["business_hours_start"] == "07:00"
@@ -32,6 +33,19 @@ def test_put_settings_updates_only_provided_fields(client, admin_user):
     assert body["tailgating_enabled"] is False
     assert body["business_hours_start"] == "08:00"
     assert body["gate_jumping_enabled"] is True  # untouched field keeps its default
+
+
+def test_put_settings_can_toggle_theft_detection(client, admin_user):
+    token = login(client, admin_user.email)
+    client.get("/api/video-intelligence-settings", headers=auth_headers(token))  # seed the row
+
+    resp = client.put(
+        "/api/video-intelligence-settings",
+        json={"theft_detection_enabled": False},
+        headers=auth_headers(token),
+    )
+    assert resp.status_code == 200
+    assert resp.json()["theft_detection_enabled"] is False
 
 
 def test_settings_require_manage_rules_permission(client, viewer_user):

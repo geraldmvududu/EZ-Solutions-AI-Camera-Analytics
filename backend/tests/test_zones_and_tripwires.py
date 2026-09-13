@@ -37,6 +37,37 @@ def test_internal_zones_endpoint_includes_restricted_area(client, admin_user):
     assert any(z["zone_type"] == "RESTRICTED_AREA" for z in resp.json())
 
 
+def test_create_asset_zone(client, admin_user):
+    """AI Video Intelligence Phase 2: ASSET_ZONE reuses loitering_threshold_seconds as
+    'minimum seconds an object must be present before its removal counts as a
+    violation' — same reuse pattern as RESTRICTED_AREA."""
+    token = login(client, admin_user.email)
+    cam = client.post("/api/cameras", json={"name": "Display Case", "source_type": "SIMULATED"}, headers=auth_headers(token)).json()
+
+    resp = client.post(
+        "/api/zones",
+        json={"camera_id": cam["id"], "name": "Display Case", "zone_type": "ASSET_ZONE", "polygon": [[0.1, 0.1], [0.9, 0.1], [0.9, 0.9]], "loitering_threshold_seconds": 15},
+        headers=auth_headers(token),
+    )
+    assert resp.status_code == 201, resp.text
+    assert resp.json()["zone_type"] == "ASSET_ZONE"
+    assert resp.json()["loitering_threshold_seconds"] == 15
+
+
+def test_internal_zones_endpoint_includes_asset_zone(client, admin_user):
+    token = login(client, admin_user.email)
+    cam = client.post("/api/cameras", json={"name": "Display Case", "source_type": "SIMULATED"}, headers=auth_headers(token)).json()
+    client.post(
+        "/api/zones",
+        json={"camera_id": cam["id"], "name": "Display Case", "zone_type": "ASSET_ZONE", "polygon": [[0.1, 0.1], [0.9, 0.1], [0.9, 0.9]]},
+        headers=auth_headers(token),
+    )
+
+    resp = client.get("/api/zones/internal/all", headers=INTERNAL_HEADERS)
+    assert resp.status_code == 200
+    assert any(z["zone_type"] == "ASSET_ZONE" for z in resp.json())
+
+
 def test_create_tripwire_with_gate_jump_and_tailgating_flags(client, admin_user):
     token = login(client, admin_user.email)
     cam = client.post("/api/cameras", json={"name": "Main Gate", "source_type": "SIMULATED"}, headers=auth_headers(token)).json()

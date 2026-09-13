@@ -7,6 +7,7 @@ from an actual decoded video frame.
 """
 
 import logging
+import math
 import threading
 import time
 from datetime import datetime, timezone
@@ -17,6 +18,7 @@ from app import streaming
 from app.backend_client import backend_client
 from app.config import get_settings
 from app.core.motion import MotionDetector
+from app.core.object_tracking import AssetZoneTracker
 from app.core.overlay import draw_overlay
 from app.core.privacy import apply_privacy_masks
 from app.core.face_recognizer import FaceRecognizer
@@ -33,6 +35,15 @@ logger = logging.getLogger("ai-engine.worker")
 settings = get_settings()
 
 VEHICLE_TYPES = {"CAR", "TRUCK", "BUS", "MOTORCYCLE", "BICYCLE"}
+# AI Video Intelligence Phase 2 (section 6) — the only COCO classes YOLOv8n gives us
+# that represent an "ownable item" someone could remove from a monitored area. See
+# yolo_detector.py's module docstring for the honest scope limit (no generic
+# box/package class).
+MONITORED_ASSET_TYPES = {"BACKPACK", "BAG", "SUITCASE"}
+# Reuses the same normalized-distance scale CentroidTracker's default max_distance
+# already treats as "the same object across frames" — good enough as a rough
+# proximity radius for "was a person standing near this item when it left."
+NEARBY_PERSON_MAX_DISTANCE = 0.15
 
 # How long a MOTION/AI_EVENT recording keeps rolling after the last trigger before it
 # closes (there is no pre-roll buffer yet — see core/recorder.py).
@@ -54,10 +65,11 @@ class CameraWorker:
         self._thread = threading.Thread(target=self._run, daemon=True, name=f"camera-{camera['camera_code']}")
 
         self._motion = MotionDetector(camera.get("motion_sensitivity", "MEDIUM")) if camera["motion_detection_enabled"] else None
-        self._detector = build_detector() if camera["ai_enabled"] else None
+        self._detector = build_detector(camera) if camera["ai_enabled"] else None
         self._tracker = CentroidTracker()
         self._loitering = LoiteringTracker()
         self._tailgating = TailgatingTracker()
+        self._asset_zone = AssetZoneTracker()
         self._recorder = SegmentRecorder(self.camera_id)
         self._reported_track_ids: set[int] = set()
         self._last_tracked: dict[int, Detection] = {}
@@ -187,7 +199,7 @@ class CameraWorker:
 
             centroid = ((detection.x + detection.width / 2), (detection.y + detection.height / 2))
             self._check_tripwires(track_id, centroid, frame, detection_id)
-            self._check_zones(track_id, centroid, frame, detection_id)
+            self._check_zones(track_id, centroid, frame, detection_id, detection, tracked)
 
             if self._face_recognizer and detection.object_type == "PERSON":
                 self._face_recognizer.maybe_recognize(
@@ -306,7 +318,18 @@ class CameraWorker:
                         }
                     )
 
-    def _check_zones(self, track_id: int, centroid, frame, detection_id) -> None:
+    def _closest_person_track_id(self, centroid, tracked: dict[int, Detection]) -> int | None:
+        best_id, best_dist = None, NEARBY_PERSON_MAX_DISTANCE
+        for other_id, other_detection in tracked.items():
+            if other_detection.object_type != "PERSON":
+                continue
+            other_centroid = (other_detection.x + other_detection.width / 2, other_detection.y + other_detection.height / 2)
+            dist = math.hypot(centroid[0] - other_centroid[0], centroid[1] - other_centroid[1])
+            if dist < best_dist:
+                best_id, best_dist = other_id, dist
+        return best_id
+
+    def _check_zones(self, track_id: int, centroid, frame, detection_id, detection: Detection, tracked: dict[int, Detection]) -> None:
         for zone in self.zones:
             if not zone.get("is_enabled", True):
                 continue
@@ -364,6 +387,40 @@ class CameraWorker:
                             "recording_id": self._recorder.recording_id,
                             "occurred_at": datetime.now(timezone.utc).isoformat(),
                             "event_metadata": {"tracking_id": track_id, "threshold_seconds": threshold, **self._identity_metadata(track_id)},
+                        }
+                    )
+
+            # AI Video Intelligence Phase 2 (section 6): only fires for a camera with
+            # a real multi-class detector enabled (multi_class_detection_enabled) —
+            # HOG never emits BACKPACK/BAG/SUITCASE detections, so this branch simply
+            # never matches on a HOG-only camera. See object_tracking.py::
+            # AssetZoneTracker for exactly what this dwell-then-exit heuristic does
+            # and does not verify.
+            if (
+                zone["zone_type"] == "ASSET_ZONE"
+                and detection.object_type in MONITORED_ASSET_TYPES
+                and self.camera.get("theft_detection_enabled", True)
+            ):
+                threshold = zone.get("loitering_threshold_seconds", settings.default_loitering_seconds)
+                if self._asset_zone.observe(track_id, zone["id"], inside, threshold, time.time()):
+                    nearby_track_id = self._closest_person_track_id(centroid, tracked)
+                    snapshot_id = self._save_and_report_snapshot(frame, detection)
+                    backend_client.create_event(
+                        {
+                            "camera_id": self.camera_id,
+                            "event_type": "POTENTIAL_THEFT_DETECTED",
+                            "severity": "HIGH",
+                            "detection_id": detection_id,
+                            "zone_id": zone["id"],
+                            "snapshot_id": snapshot_id,
+                            "recording_id": self._recorder.recording_id,
+                            "occurred_at": datetime.now(timezone.utc).isoformat(),
+                            "event_metadata": {
+                                "object_type": detection.object_type,
+                                "tracking_id": track_id,
+                                "threshold_seconds": threshold,
+                                **self._identity_metadata(nearby_track_id if nearby_track_id is not None else track_id),
+                            },
                         }
                     )
 

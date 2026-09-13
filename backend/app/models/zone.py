@@ -19,6 +19,12 @@ class ZoneType(str, enum.Enum):
     # already zone-type-agnostic) but reported/dashboarded as its own category —
     # RESTRICTED_AREA_VIOLATION events, not LOITERING_DETECTED ones.
     RESTRICTED_AREA = "RESTRICTED_AREA"
+    # AI Video Intelligence Phase 2 (section 6, "potential theft / unauthorized object
+    # removal"): a monitored asset area (shelf, display case, loading dock). Reuses the
+    # same loitering_threshold_seconds column as "minimum seconds an object must be
+    # continuously present before its removal counts as a violation" — see
+    # ai-engine/app/core/object_tracking.py::AssetZoneTracker.
+    ASSET_ZONE = "ASSET_ZONE"
 
 
 class Zone(Base, UUIDPKMixin, TimestampMixin, TenantScopedMixin):

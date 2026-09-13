@@ -10,6 +10,7 @@ class VideoIntelligenceSettingsUpdate(BaseModel):
     gate_jumping_enabled: bool | None = None
     tailgating_enabled: bool | None = None
     restricted_area_enabled: bool | None = None
+    theft_detection_enabled: bool | None = None
     min_confidence: float | None = None
     pre_event_seconds: int | None = None
     post_event_seconds: int | None = None
@@ -23,6 +24,7 @@ class VideoIntelligenceSettingsResponse(BaseModel):
     gate_jumping_enabled: bool
     tailgating_enabled: bool
     restricted_area_enabled: bool
+    theft_detection_enabled: bool
     min_confidence: float
     pre_event_seconds: int
     post_event_seconds: int

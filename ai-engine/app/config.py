@@ -11,6 +11,10 @@ class Settings(BaseSettings):
 
     recording_path: str = "./data/recordings"
     snapshot_path: str = "./data/snapshots"
+    # AI Video Intelligence Phase 2 — YOLOv8n weights are downloaded here on first use
+    # (YoloDetector) rather than baked into the image, so they land on the persistent
+    # ./data/models Docker volume mount and survive container restarts/rebuilds.
+    model_path: str = "./data/models"
 
     ai_device: str = "cpu"
     ai_confidence_threshold: float = 0.5

@@ -38,6 +38,7 @@ export interface Camera {
   face_recognition_threshold: number | null;
   face_operating_hours_start: string;
   face_operating_hours_end: string;
+  multi_class_detection_enabled: boolean;
   status: CameraStatus;
   is_active: boolean;
   is_demo: boolean;
@@ -61,7 +62,8 @@ export type EventType =
   | "UNKNOWN_FACE_DETECTED"
   | "GATE_JUMPING_DETECTED"
   | "TAILGATING_DETECTED"
-  | "RESTRICTED_AREA_VIOLATION";
+  | "RESTRICTED_AREA_VIOLATION"
+  | "POTENTIAL_THEFT_DETECTED";
 
 export interface EventItem {
   id: string;
