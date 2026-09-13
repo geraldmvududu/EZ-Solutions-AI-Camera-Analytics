@@ -97,13 +97,14 @@ export async function apiRequest<T>(path: string, options: RequestOptions = {}):
 
 // Separate from apiRequest because a multipart body must NOT get the
 // Content-Type: application/json header (or a JSON.stringify'd body) — the browser
-// needs to set its own multipart boundary. Used only by the face-enrollment upload.
-export async function apiUpload<T>(path: string, formData: FormData): Promise<T> {
+// needs to set its own multipart boundary. Used by the face-enrollment upload and the
+// enrolled-photo replace endpoint (PUT).
+export async function apiUpload<T>(path: string, formData: FormData, method: "POST" | "PUT" = "POST"): Promise<T> {
   const doFetch = async (): Promise<Response> => {
     const headers: Record<string, string> = {};
     const token = tokenStore.getAccess();
     if (token) headers["Authorization"] = `Bearer ${token}`;
-    return fetch(`${API_URL}${path}`, { method: "POST", headers, body: formData });
+    return fetch(`${API_URL}${path}`, { method, headers, body: formData });
   };
 
   let resp = await doFetch();

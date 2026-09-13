@@ -120,6 +120,90 @@ def test_enrolled_photo_path_is_stored_as_absolute(client, db_session, admin_use
     shutil.rmtree(os.path.abspath("./relative_face_dir"), ignore_errors=True)
 
 
+def test_update_person_photo_replaces_active_profile(client, db_session, admin_user, one_face):
+    """The edit counterpart to enrollment (feature request: "see or edit the image"
+    on Enrolled People) — replaces the photo/embedding without creating a duplicate
+    Person row, and keeps the old FaceProfile for audit rather than deleting it."""
+    token = login(client, admin_user.email)
+    person_id = _enroll(client, token, seed=1).json()["person"]["id"]
+
+    resp = client.put(
+        f"/api/faces/{person_id}/photo",
+        files={"photo": ("new.jpg", _textured_jpeg_bytes(2), "image/jpeg")},
+        headers=auth_headers(token),
+    )
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["success"] is True
+    assert len(body["person"]["face_profiles"]) == 2
+
+    import uuid
+
+    from app.models.face_profile import FaceProfile
+
+    profiles = db_session.query(FaceProfile).filter(FaceProfile.person_id == uuid.UUID(person_id)).all()
+    statuses = sorted(p.status.value for p in profiles)
+    assert statuses == ["ACTIVE", "SUSPENDED"]
+
+
+def test_update_person_photo_rejects_no_face(client, admin_user, one_face, monkeypatch):
+    token = login(client, admin_user.email)
+    person_id = _enroll(client, token, seed=1).json()["person"]["id"]
+
+    monkeypatch.setattr(face_embedding, "detect_faces", lambda frame: [])
+    resp = client.put(
+        f"/api/faces/{person_id}/photo",
+        files={"photo": ("new.jpg", _textured_jpeg_bytes(2), "image/jpeg")},
+        headers=auth_headers(token),
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["success"] is False
+    assert "No face detected" in body["message"]
+
+
+def test_update_person_photo_rejects_blurry_replacement(client, admin_user, one_face):
+    token = login(client, admin_user.email)
+    person_id = _enroll(client, token, seed=1).json()["person"]["id"]
+
+    flat = np.full((200, 200, 3), 128, dtype=np.uint8)
+    ok, buf = cv2.imencode(".jpg", flat)
+    assert ok
+
+    resp = client.put(
+        f"/api/faces/{person_id}/photo",
+        files={"photo": ("flat.jpg", buf.tobytes(), "image/jpeg")},
+        headers=auth_headers(token),
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["success"] is False
+    assert "blurry" in body["message"].lower()
+
+
+def test_update_person_photo_requires_manage_biometrics(client, viewer_user, admin_user, one_face):
+    token = login(client, admin_user.email)
+    person_id = _enroll(client, token, seed=1).json()["person"]["id"]
+
+    viewer_token = login(client, viewer_user.email)
+    resp = client.put(
+        f"/api/faces/{person_id}/photo",
+        files={"photo": ("new.jpg", _textured_jpeg_bytes(2), "image/jpeg")},
+        headers=auth_headers(viewer_token),
+    )
+    assert resp.status_code == 403
+
+
+def test_update_person_photo_404s_for_unknown_person(client, admin_user, one_face):
+    token = login(client, admin_user.email)
+    resp = client.put(
+        "/api/faces/00000000-0000-0000-0000-000000000000/photo",
+        files={"photo": ("new.jpg", _textured_jpeg_bytes(2), "image/jpeg")},
+        headers=auth_headers(token),
+    )
+    assert resp.status_code == 404
+
+
 def test_enroll_rejects_duplicate(client, admin_user, one_face):
     token = login(client, admin_user.email)
     first = _enroll(client, token, seed=7, first_name="Jane", last_name="Doe")

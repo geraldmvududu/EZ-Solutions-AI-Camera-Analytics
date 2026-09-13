@@ -240,6 +240,24 @@ synthetic test fixtures) posted through the real `/api/faces/enroll` endpoint:
    dev-DB copy still carrying the old relative-path bug) ran the repair script and
    confirmed the same photo kept rendering afterward.
 
+   Follow-up from the user ("Face still doesn't show" after the above fix, plus a
+   request to "see or edit the image"): the fix itself was correct, but re-testing
+   surfaced the actual reason it looked unfixed — the local dev backend has no code-
+   reload, so a running process keeps serving whatever was loaded at its last start
+   regardless of subsequent file edits, which is exactly what makes a relative-path-
+   style bug like this look intermittent. `.claude/launch.json`'s `backend` config now
+   runs uvicorn with `--reload --reload-dir backend/app`, so local dev testing
+   reflects the current code without a manual restart. Separately, added the actual
+   requested feature: `PUT /api/faces/{id}/photo` (`EditPersonModal` in
+   `EnrolledPeople.tsx`, wired to a new "Edit" action) lets an admin see the enrolled
+   photo at full size and replace it — the exact same enrollment quality gate applies
+   to the replacement (a blurry/no-face/multi-face photo is rejected the same way),
+   and the previous `FaceProfile` is marked `SUSPENDED` rather than deleted, preserving
+   the audit trail the same way `delete_person` keeps the `Person` row. Verified for
+   real against a genuinely restarted (`--reload`-picked-up) backend: replaced a real
+   enrolled photo through the actual endpoint and confirmed the new photo — not the
+   old one — rendered in the Enrolled People table afterward.
+
 **AI Video Intelligence, Phase 1** (`app/services/violation_service.py`,
 `ai-engine/app/core/tripwire_analysis.py`): extends the existing tripwire/zone
 pipeline rather than adding a parallel detection system — nearly everything the
@@ -403,7 +421,7 @@ cd ai-engine && python -m app.main
 ## Testing commands
 
 ```bash
-cd backend && pytest -q      # 143 tests: auth, RBAC, tenant isolation, camera CRUD
+cd backend && pytest -q      # 148 tests: auth, RBAC, tenant isolation, camera CRUD
                               # (including the delete cascade covering every dependent
                               # table), credential encryption, rule engine, analytics
                               # aggregates, report export, the Redis-backed rate limiter
@@ -413,9 +431,10 @@ cd backend && pytest -q      # 143 tests: auth, RBAC, tenant isolation, camera C
                               # detection, the real LBP algorithm unmocked, the blur-
                               # score's scale-invariance fix, the enrolled-photo path
                               # being stored absolute and surviving a simulated cwd
-                              # change, recognition matching, person_category/status
-                              # rule conditions, tenant isolation of biometric data,
-                              # audit logging), the
+                              # change, the photo-replace endpoint's quality gate/RBAC/
+                              # 404/audit-preserving-suspend behavior, recognition
+                              # matching, person_category/status rule conditions,
+                              # tenant isolation of biometric data, audit logging), the
                               # identified-person violation -> auto-Incident correlation,
                               # recording_id propagating Event -> Alert -> Incident,
                               # multi-frame confirmation's pending/confirm logic, the
@@ -951,3 +970,19 @@ limitation 13), `FACE_PATH` (`/data/faces`, enrolled-photo storage).
   same already-affected row and confirmed it rewrote the path to the correct absolute
   location — the same photo kept rendering in the browser afterward, unchanged.
   `cd backend && pytest -q` (143) and `cd ai-engine && pytest -q` (77) both green.
+- **Photo-edit feature + a real dev-workflow bug it surfaced, end-to-end.** After the
+  fix above, the user reported the photo still didn't show. Re-testing found the fix
+  itself was correct — the actual cause was that the local dev backend process was
+  never restarted after the code change (no `--reload`, so it kept serving the old
+  in-memory code), which looks exactly like "the fix didn't work" from the browser.
+  Confirmed directly: a `curl PUT` to the new photo-replace endpoint returned a genuine
+  `405 Method Not Allowed` against the stale process, then `200 OK` with the expected
+  response immediately after restarting with `--reload` added to
+  `.claude/launch.json` — no code change needed, just the reload flag. Then built and
+  verified the actually-requested feature for real: opened the new "Edit" modal on an
+  enrolled person, confirmed the full-size photo rendered correctly, called the new
+  `PUT /api/faces/{id}/photo` endpoint directly with a second real photo, and confirmed
+  in the browser that the Enrolled People table's thumbnail updated to the new photo
+  (not the old one) — with the API response showing the previous `FaceProfile` marked
+  `SUSPENDED` and a new one `ACTIVE`, matching the audit-preserving design.
+  `cd backend && pytest -q` (148) and `cd frontend && npm run build` both green.

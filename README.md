@@ -157,6 +157,10 @@ one discovery cycle, no restart needed.
    **Rules** page with trigger event type `FACE_RECOGNIZED` (or `UNKNOWN_FACE_DETECTED`).
 5. Draw a `FACE_DETECTION` or `FACE_EXCLUSION` zone on **Zones & Tripwires** to
    restrict where on that camera's frame recognition runs at all.
+6. On **Enrolled People**, click **Edit** on any row to see the enrolled photo at full
+   size, replace it with a new one (the same quality checks apply), or update the
+   person's name/category/department/notes. Replacing a photo keeps the previous one
+   on file (marked superseded) rather than deleting it, for audit purposes.
 
 ### Flag an enrolled person's violation (e.g. jumping a gate) as a case file
 
@@ -307,6 +311,8 @@ Migrations run automatically on backend startup.
 | Login fails after `docker compose up` | Bootstrap may not have run yet — check `docker compose logs backend` for "Created bootstrap Super Admin" |
 | 401 errors in the browser console | Access tokens expire in 15 minutes by default; the frontend auto-refreshes — if it still fails, clear localStorage and log in again |
 | Face enrollment always says "No face detected in image" | The real OpenCV Haar cascade needs a genuinely photographic, front-facing, well-lit human face — synthetic/cartoon/heavily-cropped images will correctly fail this. Not a bug: `ai-engine/tests`/`backend/tests` cover the algorithm directly with real face images and synthetic patterns respectively |
+| A real, clearly sharp phone photo is rejected with "Image is too blurry" | Fixed — was a real scale-dependence bug in the blur-sharpness check (it scored the identical sharp photo as blurry at high resolution but sharp once downscaled). If you still see this after pulling latest, the backend process needs restarting to pick up the fix (see the next row) |
+| A code fix doesn't seem to take effect (e.g. photos still don't show after pulling a fix) | Confirm the backend process was actually restarted — `uvicorn` without `--reload` keeps serving whatever code was loaded at its last start. `docker compose up -d --build backend` rebuilds and restarts the container; a bare local `uvicorn app.main:app` needs `--reload` (already the documented dev command above) or a manual restart after every backend code change |
 | A camera with Facial Recognition enabled never produces `FACE_RECOGNIZED`/`UNKNOWN_FACE_DETECTED` events | Check, in order: the camera's `face_recognition_enabled` is actually ON, no `FACE_EXCLUSION` zone covers the whole frame (or a `FACE_DETECTION` zone exists but doesn't cover where people actually appear), the camera's operating-hours window (if set) covers the current time, and `docker compose logs ai-engine` for real per-frame quality-gate rejections (too small/blurry/dark) |
 | No live dashboard updates | Check `/ws/live` isn't blocked — nginx's `/ws/` location must support `Upgrade`/`Connection` headers (already configured in `nginx/nginx.conf`) |
 | A recording won't play in the browser (blank player, or a codec error in the browser console) | The ai-engine writes recordings in a codec (`mp4v`) that isn't browser-playable, then re-encodes to H.264 via the system `ffmpeg` binary right after the recording finishes. Check `docker compose logs ai-engine` for `ffmpeg transcode failed`/`ffmpeg transcode skipped` — if either appears, the original (non-browser-playable but still valid, VLC/ffplay-usable) file was kept instead. Confirm `ffmpeg` is actually present in the ai-engine container (`docker compose exec ai-engine ffmpeg -version`) |
@@ -370,11 +376,11 @@ python -m app.main
 ## 4. Testing
 
 ```bash
-cd backend && .venv/bin/pytest -q   # 140 tests, including Facial Recognition, the
+cd backend && .venv/bin/pytest -q   # 148 tests, including Facial Recognition, the
                                      # violation-incident correlation, recording linkage,
                                      # and AI Video Intelligence (gate-jumping/tailgating/
                                      # restricted-area/theft, risk scoring, evidence clips)
-cd ai-engine && .venv/bin/pytest -q # 76 tests, including FaceRecognizer, SegmentRecorder,
+cd ai-engine && .venv/bin/pytest -q # 77 tests, including FaceRecognizer, SegmentRecorder,
                                      # the gate-jump/tailgating heuristics, the real
                                      # multi-class YoloDetector's class mapping, and the
                                      # AssetZoneTracker theft-detection heuristic

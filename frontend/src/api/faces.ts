@@ -35,6 +35,15 @@ export const updatePerson = (id: string, payload: Partial<PersonItem>) =>
 
 export const deletePerson = (id: string) => apiRequest<void>(`/api/faces/${id}`, { method: "DELETE" });
 
+// Replaces a person's enrolled photo/embedding — runs the same quality gate as
+// enrollFace, and the previous FaceProfile is kept (marked SUSPENDED) rather than
+// deleted, so this can fail (e.g. "Image is too blurry") the same way enrollment can.
+export function updatePersonPhoto(id: string, photo: File): Promise<EnrollmentResult> {
+  const form = new FormData();
+  form.set("photo", photo);
+  return apiUpload<EnrollmentResult>(`/api/faces/${id}/photo`, form, "PUT");
+}
+
 // The photo endpoint requires the same JWT auth as every other API route (unlike the
 // live-stream endpoint, which accepts a ?token= query param specifically because
 // <img>/WebView can't set headers for a long-lived stream) — for a single still image

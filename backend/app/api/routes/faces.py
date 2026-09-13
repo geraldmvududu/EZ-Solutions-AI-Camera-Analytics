@@ -225,6 +225,78 @@ def get_person(
     return _get_owned_person(db, person_id, user)
 
 
+@router.put("/faces/{person_id}/photo", response_model=EnrollmentResult)
+async def update_person_photo(
+    person_id: uuid.UUID,
+    request: Request,
+    photo: UploadFile = File(...),
+    db: Session = Depends(get_db),
+    user: User = Depends(require_permission(Permissions.MANAGE_BIOMETRICS)),
+) -> EnrollmentResult:
+    """Replaces a person's enrolled photo/embedding — the edit counterpart to enroll_
+    face's create. Runs the exact same quality gate as initial enrollment (a blurry/
+    no-face/multi-face replacement photo is rejected the same way). The previous
+    FaceProfile row is kept (marked SUSPENDED, not deleted) rather than overwritten,
+    for the same audit-trail reason delete_person keeps the Person row — a reviewer
+    can still see what the person was previously enrolled with, and stored recognition
+    events referencing the old profile keep a valid history."""
+    person = _get_owned_person(db, person_id, user)
+
+    raw = await photo.read()
+    frame = face_embedding.decode_image_bytes(raw)
+    if frame is None:
+        return EnrollmentResult(success=False, message="Uploaded file is not a valid image")
+
+    quality = face_embedding.assess_enrollment_quality(frame, settings.face_min_quality)
+    if not quality.passed:
+        return EnrollmentResult(success=False, message=quality.reason, quality_score=quality.quality_score)
+
+    vector = face_embedding.compute_embedding(frame, quality.face)
+
+    for profile, existing_person in _active_profiles(db, user.tenant_id):
+        if existing_person.id == person.id:
+            continue
+        stored = face_embedding.embedding_from_base64(decrypt_face_embedding(profile.embedding_encrypted))
+        if face_embedding.compare_embeddings(vector, stored) >= _DUPLICATE_MATCH_THRESHOLD:
+            return EnrollmentResult(
+                success=False,
+                message=f"A very similar face is already enrolled as {existing_person.first_name} {existing_person.last_name} — possible duplicate enrollment",
+            )
+
+    person_dir = os.path.join(os.path.abspath(settings.face_path), str(user.tenant_id))
+    os.makedirs(person_dir, exist_ok=True)
+
+    new_profile = FaceProfile(
+        tenant_id=user.tenant_id,
+        person_id=person.id,
+        embedding_encrypted=encrypt_face_embedding(face_embedding.embedding_to_base64(vector)),
+        model_version=face_embedding.FACE_MODEL_VERSION,
+        image_reference="",
+        quality_score=quality.quality_score,
+    )
+    db.add(new_profile)
+    db.flush()  # assigns new_profile.id without committing yet
+
+    image_path = os.path.join(person_dir, f"{new_profile.id}.jpg")
+    with open(image_path, "wb") as f:
+        f.write(raw)
+    new_profile.image_reference = image_path
+
+    for profile in person.face_profiles:
+        if profile.id != new_profile.id and profile.status == FaceProfileStatus.ACTIVE:
+            profile.status = FaceProfileStatus.SUSPENDED
+
+    db.commit()
+    db.refresh(person)
+
+    log_action(
+        db, action="FACE_MODIFY", tenant_id=user.tenant_id, user_id=user.id,
+        resource_type="person", resource_id=str(person.id), ip_address=_client_ip(request),
+        details={"action": "photo_updated"},
+    )
+    return EnrollmentResult(success=True, message="Photo updated", person=person, quality_score=quality.quality_score)
+
+
 @router.put("/faces/{person_id}", response_model=PersonResponse)
 def update_person(
     person_id: uuid.UUID,

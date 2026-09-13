@@ -1,16 +1,21 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Layout } from "../../components/layout/Layout";
 import * as facesApi from "../../api/faces";
 import { getRecording } from "../../api/misc";
 import { VideoPlayerModal } from "../Recordings";
-import type { FaceRecognitionEventItem, PersonItem, PersonStatus } from "../../types";
+import type { FaceRecognitionEventItem, PersonCategory, PersonItem, PersonStatus } from "../../types";
 
-function PersonPhoto({ personId }: { personId: string }) {
+// Shared by both the table thumbnail and the edit modal's larger preview — refetches
+// whenever `version` changes, so a just-uploaded replacement photo shows immediately
+// without needing a full page reload (the backend URL itself never changes, only the
+// underlying file/profile it serves).
+function PersonPhoto({ personId, className, version }: { personId: string; className?: string; version?: number }) {
   const [url, setUrl] = useState<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
     let objectUrl: string | null = null;
+    setUrl(null);
     facesApi.fetchPersonPhoto(personId).then((u) => {
       if (cancelled) return;
       objectUrl = u;
@@ -20,12 +25,155 @@ function PersonPhoto({ personId }: { personId: string }) {
       cancelled = true;
       if (objectUrl) URL.revokeObjectURL(objectUrl);
     };
-  }, [personId]);
+  }, [personId, version]);
 
   return url ? (
-    <img src={url} alt="" className="h-10 w-10 rounded object-cover border border-base-600" />
+    <img src={url} alt="" className={className ?? "h-10 w-10 rounded object-cover border border-base-600"} />
   ) : (
-    <div className="h-10 w-10 rounded bg-base-800 border border-base-600" />
+    <div className={className ?? "h-10 w-10 rounded bg-base-800 border border-base-600"} />
+  );
+}
+
+const PERSON_CATEGORIES: PersonCategory[] = ["EMPLOYEE", "CONTRACTOR", "VISITOR", "AUTHORIZED_PERSON", "WATCHLIST"];
+
+function EditPersonModal({ person, onClose, onSaved }: { person: PersonItem; onClose: () => void; onSaved: () => void }) {
+  const [firstName, setFirstName] = useState(person.first_name);
+  const [lastName, setLastName] = useState(person.last_name);
+  const [category, setCategory] = useState<PersonCategory>(person.category);
+  const [department, setDepartment] = useState(person.department);
+  const [externalReference, setExternalReference] = useState(person.external_reference);
+  const [notes, setNotes] = useState(person.notes);
+  const [photoVersion, setPhotoVersion] = useState(0);
+  const [uploading, setUploading] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [savedAt, setSavedAt] = useState<number | null>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
+  async function handleReplacePhoto(file: File) {
+    setUploading(true);
+    setError(null);
+    try {
+      const result = await facesApi.updatePersonPhoto(person.id, file);
+      if (!result.success) {
+        setError(result.message);
+        return;
+      }
+      setPhotoVersion((v) => v + 1);
+      onSaved();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to update photo");
+    } finally {
+      setUploading(false);
+      if (fileInputRef.current) fileInputRef.current.value = "";
+    }
+  }
+
+  async function handleSaveDetails() {
+    setSaving(true);
+    setError(null);
+    try {
+      await facesApi.updatePerson(person.id, {
+        first_name: firstName,
+        last_name: lastName,
+        category,
+        department,
+        external_reference: externalReference,
+        notes,
+      });
+      setSavedAt(Date.now());
+      onSaved();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to save changes");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4">
+      <div className="bg-base-900 border border-base-700 rounded-lg w-full max-w-md p-5 space-y-4 max-h-[85vh] overflow-y-auto">
+        <h3 className="font-semibold text-slate-100">Edit {person.first_name} {person.last_name}</h3>
+
+        {error && <div className="text-severity-critical text-sm">{error}</div>}
+
+        <div>
+          <div className="text-xs text-slate-400 mb-2">Enrolled photo</div>
+          <div className="flex items-center gap-4">
+            <PersonPhoto
+              personId={person.id}
+              version={photoVersion}
+              className="h-28 w-28 rounded object-cover border border-base-600"
+            />
+            <div className="space-y-2">
+              <input
+                ref={fileInputRef}
+                type="file"
+                accept="image/*"
+                onChange={(e) => e.target.files?.[0] && handleReplacePhoto(e.target.files[0])}
+                disabled={uploading}
+                className="text-xs text-slate-400"
+              />
+              <p className="text-xs text-slate-500 max-w-[220px]">
+                {uploading ? "Uploading..." : "Replace with a new photo — subject to the same quality checks as enrollment."}
+              </p>
+            </div>
+          </div>
+        </div>
+
+        <div className="grid grid-cols-2 gap-3">
+          <div>
+            <label className="block text-xs text-slate-400 mb-1">First name</label>
+            <input value={firstName} onChange={(e) => setFirstName(e.target.value)} className="w-full rounded bg-base-800 border border-base-600 px-3 py-1.5 text-sm text-slate-100" />
+          </div>
+          <div>
+            <label className="block text-xs text-slate-400 mb-1">Last name</label>
+            <input value={lastName} onChange={(e) => setLastName(e.target.value)} className="w-full rounded bg-base-800 border border-base-600 px-3 py-1.5 text-sm text-slate-100" />
+          </div>
+        </div>
+
+        <div>
+          <label className="block text-xs text-slate-400 mb-1">Category</label>
+          <select
+            value={category}
+            onChange={(e) => setCategory(e.target.value as PersonCategory)}
+            className="w-full rounded bg-base-800 border border-base-600 px-3 py-1.5 text-sm text-slate-100"
+          >
+            {PERSON_CATEGORIES.map((c) => (
+              <option key={c} value={c}>
+                {c.replace(/_/g, " ")}
+              </option>
+            ))}
+          </select>
+        </div>
+
+        <div className="grid grid-cols-2 gap-3">
+          <div>
+            <label className="block text-xs text-slate-400 mb-1">Reference</label>
+            <input value={externalReference} onChange={(e) => setExternalReference(e.target.value)} className="w-full rounded bg-base-800 border border-base-600 px-3 py-1.5 text-sm text-slate-100" />
+          </div>
+          <div>
+            <label className="block text-xs text-slate-400 mb-1">Department</label>
+            <input value={department} onChange={(e) => setDepartment(e.target.value)} className="w-full rounded bg-base-800 border border-base-600 px-3 py-1.5 text-sm text-slate-100" />
+          </div>
+        </div>
+
+        <div>
+          <label className="block text-xs text-slate-400 mb-1">Notes</label>
+          <textarea value={notes} onChange={(e) => setNotes(e.target.value)} rows={2} className="w-full rounded bg-base-800 border border-base-600 px-3 py-1.5 text-sm text-slate-100" />
+        </div>
+
+        <div className="flex items-center justify-end gap-3 pt-2">
+          {savedAt && <span className="text-xs text-slate-500">Saved.</span>}
+          <button type="button" onClick={onClose} className="px-3 py-1.5 text-sm rounded border border-base-600 text-slate-300">
+            Close
+          </button>
+          <button type="button" onClick={handleSaveDetails} disabled={saving} className="px-3 py-1.5 text-sm rounded bg-accent-600 hover:bg-accent-500 text-white disabled:opacity-50">
+            {saving ? "Saving..." : "Save"}
+          </button>
+        </div>
+      </div>
+    </div>
   );
 }
 
@@ -119,6 +267,8 @@ export function EnrolledPeoplePage() {
   const [q, setQ] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [viewingAppearances, setViewingAppearances] = useState<PersonItem | null>(null);
+  const [editingPerson, setEditingPerson] = useState<PersonItem | null>(null);
+  const [photoVersions, setPhotoVersions] = useState<Record<string, number>>({});
 
   async function load(query?: string) {
     try {
@@ -178,7 +328,7 @@ export function EnrolledPeoplePage() {
             {people.map((p) => (
               <tr key={p.id}>
                 <td className="px-4 py-2">
-                  <PersonPhoto personId={p.id} />
+                  <PersonPhoto personId={p.id} version={photoVersions[p.id]} />
                 </td>
                 <td className="px-4 py-2 text-slate-100">{p.first_name} {p.last_name}</td>
                 <td className="px-4 py-2 text-slate-400">{p.external_reference || "—"}</td>
@@ -201,6 +351,11 @@ export function EnrolledPeoplePage() {
                 </td>
                 <td className="px-4 py-2">
                   <div className="flex items-center gap-3">
+                    {p.status !== "DELETED" && (
+                      <button onClick={() => setEditingPerson(p)} className="text-accent-500 hover:underline text-xs">
+                        Edit
+                      </button>
+                    )}
                     <button onClick={() => setViewingAppearances(p)} className="text-accent-500 hover:underline text-xs">
                       Appearances
                     </button>
@@ -225,6 +380,17 @@ export function EnrolledPeoplePage() {
       </div>
 
       {viewingAppearances && <AppearancesModal person={viewingAppearances} onClose={() => setViewingAppearances(null)} />}
+
+      {editingPerson && (
+        <EditPersonModal
+          person={editingPerson}
+          onClose={() => setEditingPerson(null)}
+          onSaved={() => {
+            setPhotoVersions((prev) => ({ ...prev, [editingPerson.id]: (prev[editingPerson.id] || 0) + 1 }));
+            load(q);
+          }}
+        />
+      )}
     </Layout>
   );
 }
