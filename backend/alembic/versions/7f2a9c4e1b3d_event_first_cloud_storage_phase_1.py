@@ -168,7 +168,21 @@ def upgrade() -> None:
         "MOTION_DETECTED": "OPERATIONS", "CAMERA_OFFLINE": "OPERATIONS", "CAMERA_ONLINE": "OPERATIONS",
         "RECORDING_FAILURE": "OPERATIONS", "AI_DETECTION": "OPERATIONS",
     }
-    events_table = sa.table('events', sa.column('event_type', sa.String()), sa.column('event_category', sa.String()))
+    # Real bug found deploying this migration to real Postgres (SQLite testing didn't
+    # catch it — SQLite has no true enum type, so a plain-VARCHAR column comparison
+    # "worked" there): events.event_type is a genuine Postgres ENUM (`eventtype`), and
+    # declaring it as sa.String() here binds the comparison value as character varying,
+    # which Postgres refuses to compare against an enum column with no cast
+    # ("operator does not exist: eventtype = character varying"). create_type=False
+    # since the type already exists — this is a column-type descriptor for correct
+    # parameter binding, not a request to (re)create the Postgres enum.
+    existing_event_type = sa.Enum(
+        'PERSON_DETECTED', 'VEHICLE_DETECTED', 'MOTION_DETECTED', 'TRIPWIRE_VIOLATION', 'INTRUSION_DETECTED',
+        'LOITERING_DETECTED', 'CAMERA_OFFLINE', 'CAMERA_ONLINE', 'RECORDING_FAILURE', 'AI_DETECTION',
+        'FACE_RECOGNIZED', 'UNKNOWN_FACE_DETECTED', 'GATE_JUMPING_DETECTED', 'TAILGATING_DETECTED',
+        'RESTRICTED_AREA_VIOLATION', 'POTENTIAL_THEFT_DETECTED', name='eventtype', create_type=False,
+    )
+    events_table = sa.table('events', sa.column('event_type', existing_event_type), sa.column('event_category', sa.String()))
     for event_type, category in category_by_type.items():
         connection.execute(events_table.update().where(events_table.c.event_type == event_type).values(event_category=category))
 
