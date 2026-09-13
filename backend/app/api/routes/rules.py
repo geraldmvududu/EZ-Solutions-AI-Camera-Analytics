@@ -7,6 +7,7 @@ from app.core.audit import log_action
 from app.core.deps import require_permission, tenant_filter_value
 from app.core.permissions import Permissions
 from app.database import get_db
+from app.models.alert import Alert
 from app.models.rule import AIRule
 from app.models.user import User
 from app.schemas.rule import AIRuleCreate, AIRuleResponse, AIRuleUpdate
@@ -70,7 +71,16 @@ def delete_rule(
     db: Session = Depends(get_db),
     user: User = Depends(require_permission(Permissions.MANAGE_RULES)),
 ) -> None:
+    """Real bug found live on the deployed VM (a genuine alerts_rule_id_fkey
+    ForeignKeyViolation): a rule that already matched a real event and created a real
+    Alert couldn't be deleted at all — `db.delete(rule)` alone raised an unhandled
+    IntegrityError the moment any Alert referenced it. Alert.rule_id is nullable, so
+    every Alert this rule ever created is unscoped (not deleted) first — same
+    "unscope rather than destroy" treatment cameras.py::delete_camera already gives
+    AIRule/Incident: an alert's own history/evidence outlives the rule config that
+    happened to generate it."""
     rule = _get_owned_rule(db, rule_id, user)
+    db.query(Alert).filter(Alert.rule_id == rule_id).update({"rule_id": None}, synchronize_session=False)
     db.delete(rule)
     db.commit()
     log_action(db, action="RULE_DELETED", tenant_id=user.tenant_id, user_id=user.id, resource_type="rule", resource_id=str(rule_id))
