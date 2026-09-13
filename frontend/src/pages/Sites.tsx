@@ -1,5 +1,6 @@
 import { useEffect, useState, type FormEvent } from "react";
 import { Layout } from "../components/layout/Layout";
+import { ConfirmDialog } from "../components/ui/ConfirmDialog";
 import * as sitesApi from "../api/sites";
 import type { Site } from "../types";
 import { ApiError } from "../api/client";
@@ -67,6 +68,7 @@ export function SitesPage() {
   const [editingSite, setEditingSite] = useState<Site | null>(null);
   const [showModal, setShowModal] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [deleteTarget, setDeleteTarget] = useState<Site | null>(null);
 
   async function load() {
     try {
@@ -90,8 +92,10 @@ export function SitesPage() {
     setShowModal(true);
   }
 
-  async function handleDelete(id: string) {
-    if (!confirm("Delete this site? Cameras assigned to it will be unassigned, not deleted.")) return;
+  async function confirmDelete() {
+    if (!deleteTarget) return;
+    const id = deleteTarget.id;
+    setDeleteTarget(null);
     setError(null);
     try {
       await sitesApi.deleteSite(id);
@@ -135,7 +139,7 @@ export function SitesPage() {
                     <button onClick={() => openEdit(site)} className="text-accent-500 hover:underline text-xs">
                       Edit
                     </button>
-                    <button onClick={() => handleDelete(site.id)} className="text-severity-critical hover:underline text-xs">
+                    <button onClick={() => setDeleteTarget(site)} className="text-severity-critical hover:underline text-xs">
                       Delete
                     </button>
                   </div>
@@ -154,6 +158,15 @@ export function SitesPage() {
       </div>
 
       {showModal && <SiteFormModal site={editingSite} onClose={() => setShowModal(false)} onSaved={load} />}
+
+      {deleteTarget && (
+        <ConfirmDialog
+          title="Delete site"
+          message={`Delete "${deleteTarget.name}"? Cameras assigned to it will be unassigned, not deleted.`}
+          onConfirm={confirmDelete}
+          onCancel={() => setDeleteTarget(null)}
+        />
+      )}
     </Layout>
   );
 }

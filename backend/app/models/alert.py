@@ -29,8 +29,8 @@ class Alert(Base, UUIDPKMixin, TimestampMixin, TenantScopedMixin):
     severity: Mapped[EventSeverity] = mapped_column(Enum(EventSeverity), nullable=False, index=True)
     status: Mapped[AlertStatus] = mapped_column(Enum(AlertStatus), default=AlertStatus.NEW, nullable=False, index=True)
 
-    snapshot_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("snapshots.id"), nullable=True)
-    recording_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("recordings.id"), nullable=True)
+    snapshot_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("snapshots.id"), nullable=True, index=True)
+    recording_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("recordings.id"), nullable=True, index=True)
 
     assigned_user_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("users.id"), nullable=True)
     notes: Mapped[str] = mapped_column(String(2000), nullable=False, default="")

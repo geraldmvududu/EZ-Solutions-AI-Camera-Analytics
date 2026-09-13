@@ -49,6 +49,8 @@ export interface AIRule {
 export const listRules = () => apiRequest<AIRule[]>("/api/rules");
 export const createRule = (payload: Partial<AIRule> & { name: string; conditions: Record<string, unknown> }) =>
   apiRequest<AIRule>("/api/rules", { method: "POST", body: payload });
+export const updateRule = (id: string, payload: Partial<AIRule>) =>
+  apiRequest<AIRule>(`/api/rules/${id}`, { method: "PATCH", body: payload });
 export const deleteRule = (id: string) => apiRequest<void>(`/api/rules/${id}`, { method: "DELETE" });
 
 export interface IncidentAlert {

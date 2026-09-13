@@ -31,7 +31,7 @@ class Incident(Base, UUIDPKMixin, TimestampMixin, TenantScopedMixin):
     title: Mapped[str] = mapped_column(String(255), nullable=False)
     description: Mapped[str] = mapped_column(String(4000), nullable=False, default="")
     severity: Mapped[EventSeverity] = mapped_column(Enum(EventSeverity), nullable=False)
-    camera_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("cameras.id"), nullable=True)
+    camera_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("cameras.id"), nullable=True, index=True)
     status: Mapped[IncidentStatus] = mapped_column(Enum(IncidentStatus), default=IncidentStatus.OPEN, nullable=False, index=True)
     assigned_user_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("users.id"), nullable=True)
     resolution: Mapped[str] = mapped_column(String(4000), nullable=False, default="")
@@ -64,6 +64,6 @@ class Incident(Base, UUIDPKMixin, TimestampMixin, TenantScopedMixin):
     # event type (gate-jumping/tailgating/restricted-area) is created regardless of
     # whether any AIRule matched it, so it may have zero related Alerts; relying on an
     # Alert join would silently skip evidence-clip generation for those tenants.
-    source_event_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("events.id"), nullable=True)
+    source_event_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("events.id"), nullable=True, index=True)
 
     related_alerts = relationship("Alert", secondary=incident_alerts, lazy="selectin")

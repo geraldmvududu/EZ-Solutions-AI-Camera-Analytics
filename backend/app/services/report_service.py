@@ -131,3 +131,62 @@ def build_security_report_pdf(
 
     doc.build(story)
     return buffer.getvalue()
+
+
+def build_event_detail_pdf(event: Event, camera_name: str) -> bytes:
+    """A single event's full detail as a standalone PDF (section: per-event export) —
+    the same fields the Events page's detail modal already shows (type/severity/
+    category/review status/description/raw metadata), not a second, differently-worded
+    summary of it. No prose "explanation" here — that's presentation-layer text
+    (frontend's explainEvent.ts); this is the underlying real data it's built from."""
+    buffer = io.BytesIO()
+    doc = SimpleDocTemplate(buffer, pagesize=letter, topMargin=0.75 * inch, bottomMargin=0.75 * inch)
+    styles = getSampleStyleSheet()
+    story = []
+
+    story.append(Paragraph("EZ Solutions AI Camera Analytics — Event Report", styles["Title"]))
+    story.append(Paragraph(event.event_type.value.replace("_", " ").title(), styles["Normal"]))
+    story.append(Paragraph(f"Generated: {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M')} UTC", styles["Normal"]))
+    story.append(Spacer(1, 16))
+
+    def table(rows: list[list[str]]) -> None:
+        t = Table(rows, hAlign="LEFT", colWidths=[1.6 * inch, 4.4 * inch])
+        t.setStyle(TableStyle([
+            ("FONTSIZE", (0, 0), (-1, -1), 9),
+            ("GRID", (0, 0), (-1, -1), 0.5, colors.HexColor("#CCCCCC")),
+            ("BACKGROUND", (0, 0), (0, -1), colors.HexColor("#F4F6F5")),
+            ("VALIGN", (0, 0), (-1, -1), "TOP"),
+        ]))
+        story.append(t)
+        story.append(Spacer(1, 16))
+
+    table([
+        ["Event ID", str(event.id)],
+        ["Camera", camera_name],
+        ["Type", event.event_type.value],
+        ["Category", event.event_category.value],
+        ["Severity", event.severity.value],
+        ["Occurred At", event.occurred_at.strftime("%Y-%m-%d %H:%M:%S UTC")],
+        ["Review Status", event.status.value],
+        ["Reviewed At", event.reviewed_at.strftime("%Y-%m-%d %H:%M:%S UTC") if event.reviewed_at else "—"],
+    ])
+
+    if event.description:
+        story.append(Paragraph("Description", styles["Heading2"]))
+        story.append(Paragraph(event.description, styles["Normal"]))
+        story.append(Spacer(1, 16))
+
+    if event.notes:
+        story.append(Paragraph("Investigation Notes", styles["Heading2"]))
+        story.append(Paragraph(event.notes, styles["Normal"]))
+        story.append(Spacer(1, 16))
+
+    metadata_rows = [[k, str(v)] for k, v in (event.event_metadata or {}).items() if v is not None]
+    story.append(Paragraph("Detection Data", styles["Heading2"]))
+    if metadata_rows:
+        table(metadata_rows)
+    else:
+        story.append(Paragraph("No additional detection data for this event.", styles["Normal"]))
+
+    doc.build(story)
+    return buffer.getvalue()

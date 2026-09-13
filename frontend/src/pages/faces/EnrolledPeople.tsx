@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { Layout } from "../../components/layout/Layout";
+import { ConfirmDialog } from "../../components/ui/ConfirmDialog";
 import * as facesApi from "../../api/faces";
 import { getRecording } from "../../api/misc";
 import { VideoPlayerModal } from "../Recordings";
@@ -269,6 +270,7 @@ export function EnrolledPeoplePage() {
   const [viewingAppearances, setViewingAppearances] = useState<PersonItem | null>(null);
   const [editingPerson, setEditingPerson] = useState<PersonItem | null>(null);
   const [photoVersions, setPhotoVersions] = useState<Record<string, number>>({});
+  const [deleteTarget, setDeleteTarget] = useState<PersonItem | null>(null);
 
   async function load(query?: string) {
     try {
@@ -287,9 +289,10 @@ export function EnrolledPeoplePage() {
     load(q);
   }
 
-  async function handleDelete(person: PersonItem) {
-    if (!confirm(`Delete ${person.first_name} ${person.last_name}? This permanently removes their biometric data.`)) return;
-    await facesApi.deletePerson(person.id);
+  async function confirmDelete() {
+    if (!deleteTarget) return;
+    await facesApi.deletePerson(deleteTarget.id);
+    setDeleteTarget(null);
     load(q);
   }
 
@@ -360,7 +363,7 @@ export function EnrolledPeoplePage() {
                       Appearances
                     </button>
                     {p.status !== "DELETED" && (
-                      <button onClick={() => handleDelete(p)} className="text-severity-critical hover:underline text-xs">
+                      <button onClick={() => setDeleteTarget(p)} className="text-severity-critical hover:underline text-xs">
                         Delete
                       </button>
                     )}
@@ -389,6 +392,15 @@ export function EnrolledPeoplePage() {
             setPhotoVersions((prev) => ({ ...prev, [editingPerson.id]: (prev[editingPerson.id] || 0) + 1 }));
             load(q);
           }}
+        />
+      )}
+
+      {deleteTarget && (
+        <ConfirmDialog
+          title="Delete enrolled person"
+          message={`Delete ${deleteTarget.first_name} ${deleteTarget.last_name}? This permanently removes their biometric data.`}
+          onConfirm={confirmDelete}
+          onCancel={() => setDeleteTarget(null)}
         />
       )}
     </Layout>

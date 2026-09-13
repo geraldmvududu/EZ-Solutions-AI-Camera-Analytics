@@ -5,6 +5,7 @@ import { SnapshotImage } from "../components/ui/SnapshotImage";
 import { listEvents, reviewEvent, addEventNotes } from "../api/events";
 import * as camerasApi from "../api/cameras";
 import { getRecording } from "../api/misc";
+import { downloadEventPdf } from "../api/analytics";
 import { explainEvent } from "../utils/explainEvent";
 import { useAuth } from "../context/AuthContext";
 import type { Camera, EventCategory, EventItem, EventReviewStatus } from "../types";
@@ -29,8 +30,20 @@ function EventDetailModal({
   const [notes, setNotes] = useState(event.notes);
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
+  const [downloadingPdf, setDownloadingPdf] = useState(false);
   const { hasPermission } = useAuth();
   const canReview = hasPermission("manage_alerts");
+
+  async function handleDownloadPdf() {
+    setDownloadingPdf(true);
+    try {
+      await downloadEventPdf(event.id);
+    } catch (err) {
+      setSaveError(err instanceof Error ? err.message : "Failed to download PDF");
+    } finally {
+      setDownloadingPdf(false);
+    }
+  }
 
   async function handleViewRecording() {
     if (!event.recording_id) return;
@@ -148,7 +161,10 @@ function EventDetailModal({
           </div>
         )}
 
-        <div className="flex justify-end pt-2">
+        <div className="flex justify-between pt-2">
+          <button type="button" onClick={handleDownloadPdf} disabled={downloadingPdf} className="px-3 py-1.5 text-sm rounded border border-base-600 text-slate-300 disabled:opacity-50">
+            {downloadingPdf ? "Downloading..." : "Download PDF"}
+          </button>
           <button type="button" onClick={onClose} className="px-3 py-1.5 text-sm rounded border border-base-600 text-slate-300">
             Close
           </button>
@@ -272,7 +288,7 @@ export function EventsPage() {
                 <td className="px-4 py-2">
                   <StatusBadge status={e.status} />
                 </td>
-                <td className="px-4 py-2 text-slate-400">{e.description || "—"}</td>
+                <td className="px-4 py-2 text-slate-400 max-w-xs truncate" title={e.description || explainEvent(e)}>{e.description || explainEvent(e)}</td>
                 <td className="px-4 py-2 text-slate-500">{new Date(e.occurred_at).toLocaleString()}</td>
                 <td className="px-4 py-2">
                   <button onClick={() => setViewing(e)} className="text-accent-500 hover:underline text-xs">

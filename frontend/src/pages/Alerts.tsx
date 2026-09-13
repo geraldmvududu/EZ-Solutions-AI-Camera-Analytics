@@ -239,7 +239,7 @@ export function AlertsPage() {
           <tbody className="divide-y divide-base-700">
             {alerts.map((a) => (
               <tr key={a.id}>
-                <td className="px-4 py-2 text-slate-100">{a.alert_type.replace(/_/g, " ")}</td>
+                <td className="px-4 py-2 text-slate-100">{ruleName(a.rule_id) || a.alert_type.replace(/_/g, " ")}</td>
                 <td className="px-4 py-2">
                   <SeverityBadge severity={a.severity} />
                 </td>

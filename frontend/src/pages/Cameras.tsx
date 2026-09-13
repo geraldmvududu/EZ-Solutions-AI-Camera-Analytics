@@ -1,6 +1,7 @@
 import { useEffect, useState, type FormEvent } from "react";
 import { Layout } from "../components/layout/Layout";
 import { StatusBadge } from "../components/ui/Badge";
+import { ConfirmDialog } from "../components/ui/ConfirmDialog";
 import * as camerasApi from "../api/cameras";
 import * as sitesApi from "../api/sites";
 import type { Camera, CameraSourceType, Site } from "../types";
@@ -189,6 +190,7 @@ export function CamerasPage() {
   const [showModal, setShowModal] = useState(false);
   const [testResults, setTestResults] = useState<Record<string, string>>({});
   const [error, setError] = useState<string | null>(null);
+  const [deleteTarget, setDeleteTarget] = useState<Camera | null>(null);
 
   async function load() {
     try {
@@ -221,8 +223,10 @@ export function CamerasPage() {
     }
   }
 
-  async function handleDelete(id: string) {
-    if (!confirm("Delete this camera? This cannot be undone.")) return;
+  async function confirmDelete() {
+    if (!deleteTarget) return;
+    const id = deleteTarget.id;
+    setDeleteTarget(null);
     setError(null);
     try {
       await camerasApi.deleteCamera(id);
@@ -280,7 +284,7 @@ export function CamerasPage() {
                     <button onClick={() => handleTest(cam.id)} className="text-accent-500 hover:underline text-xs">
                       Test
                     </button>
-                    <button onClick={() => handleDelete(cam.id)} className="text-severity-critical hover:underline text-xs">
+                    <button onClick={() => setDeleteTarget(cam)} className="text-severity-critical hover:underline text-xs">
                       Delete
                     </button>
                   </div>
@@ -300,6 +304,15 @@ export function CamerasPage() {
       </div>
 
       {showModal && <CameraFormModal sites={sites} onClose={() => setShowModal(false)} onCreated={load} />}
+
+      {deleteTarget && (
+        <ConfirmDialog
+          title="Delete camera"
+          message={`Delete "${deleteTarget.name}"? This permanently removes its events, detections, snapshots, recordings, zones, and tripwires. This cannot be undone.`}
+          onConfirm={confirmDelete}
+          onCancel={() => setDeleteTarget(null)}
+        />
+      )}
     </Layout>
   );
 }

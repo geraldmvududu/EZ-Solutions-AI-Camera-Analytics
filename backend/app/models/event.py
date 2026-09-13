@@ -79,10 +79,10 @@ class Event(Base, UUIDPKMixin, TimestampMixin, TenantScopedMixin):
     zone_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("zones.id"), nullable=True)
     tripwire_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("tripwires.id"), nullable=True)
     snapshot_id: Mapped[uuid.UUID | None] = mapped_column(
-        ForeignKey("snapshots.id", use_alter=True, name="fk_events_snapshot_id"), nullable=True
+        ForeignKey("snapshots.id", use_alter=True, name="fk_events_snapshot_id"), nullable=True, index=True
     )
     recording_id: Mapped[uuid.UUID | None] = mapped_column(
-        ForeignKey("recordings.id", use_alter=True, name="fk_events_recording_id"), nullable=True
+        ForeignKey("recordings.id", use_alter=True, name="fk_events_recording_id"), nullable=True, index=True
     )
 
     occurred_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, index=True)

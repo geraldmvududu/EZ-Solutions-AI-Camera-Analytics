@@ -14,6 +14,8 @@ from app.models.detection import Detection, ObjectType
 from app.models.event import Event, EventSeverity, EventType
 from app.models.face_profile import FaceProfile
 from app.models.face_recognition_event import FaceRecognitionEvent, RecognitionStatus
+from app.models.incident import Incident, IncidentStatus, incident_alerts
+from app.models.notification import Notification
 from app.models.person import Person, PersonCategory
 from app.models.recording import Recording, RecordingTrigger
 from app.models.rule import AIRule
@@ -79,6 +81,21 @@ def test_delete_camera_with_full_real_dependent_data(client, db_session, admin_u
     db_session.commit()
     rule_id = rule.id
 
+    # Real bug found live on the deployed VM: notifications and incidents referencing
+    # this camera's alerts/events weren't cleaned up before those rows were deleted,
+    # producing a real notifications_alert_id_fkey ForeignKeyViolation. Build both here
+    # the same way the real pipeline does (notification_service.py, violation_service.py).
+    notification = Notification(tenant_id=tenant.id, user_id=admin_user.id, alert_id=alert.id, title="Alert fired", body="")
+    incident = Incident(
+        tenant_id=tenant.id, title="Auto incident", severity=EventSeverity.HIGH,
+        status=IncidentStatus.OPEN, camera_id=camera_id, source_event_id=event.id,
+    )
+    db_session.add_all([notification, incident])
+    db_session.commit()
+    db_session.execute(incident_alerts.insert().values(incident_id=incident.id, alert_id=alert.id))
+    db_session.commit()
+    incident_id, notification_id = incident.id, notification.id
+
     resp = client.delete(f"/api/cameras/{camera_id}", headers=auth_headers(token))
     assert resp.status_code == 204, resp.text
 
@@ -106,6 +123,24 @@ def test_delete_camera_with_full_real_dependent_data(client, db_session, admin_u
 
     # The enrolled person (not camera-specific data) is untouched.
     assert db_session.get(Person, person.id) is not None
+
+    # The incident survives too, just unscoped from the deleted camera/event — same
+    # "unscope rather than destroy" treatment as AIRule, since an investigation record
+    # is valuable independent of which camera originally generated it.
+    surviving_incident = db_session.get(Incident, incident_id)
+    assert surviving_incident is not None
+    assert surviving_incident.camera_id is None
+    assert surviving_incident.source_event_id is None
+
+    # The incident_alerts join row for the now-deleted alert is gone (no dangling FK),
+    # but the incident itself is untouched by that.
+    assert db_session.execute(incident_alerts.select().where(incident_alerts.c.incident_id == incident_id)).first() is None
+
+    # The notification survives, just unlinked from the deleted alert — a user's
+    # notification history shouldn't vanish because the underlying camera was removed.
+    surviving_notification = db_session.get(Notification, notification_id)
+    assert surviving_notification is not None
+    assert surviving_notification.alert_id is None
 
 
 def test_delete_camera_still_works_with_no_dependent_data(client, admin_user):

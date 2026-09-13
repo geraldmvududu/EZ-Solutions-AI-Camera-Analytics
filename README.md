@@ -264,6 +264,27 @@ limitation 17 for the full detail.
    human-review treatment as gate-jumping/tailgating/restricted-area above), noting
    nearby identified people only when a genuine face match exists.
 
+### Organize cameras into Sites, and review cloud storage usage
+
+1. On the new **Sites** page (`view_sites`/`manage_sites` permission), add a Site —
+   name, address, timezone. Existing cameras aren't affected until you assign them.
+2. On **Cameras**, the create form's new **Site** dropdown assigns a camera to one; the
+   **Cloud Recording** checkbox (off by default) opts that camera's *continuous*
+   recordings into cloud storage too — snapshots and AI-event evidence clips/recordings
+   always upload regardless of this flag.
+3. **Events** now has real filters (camera, severity, category, review status, date
+   range) and a **Mark as Reviewed** / investigation-notes workflow in the event detail
+   modal — useful once a Security Manager (a new role between Operator and Admin, can
+   review events/sites but not manage users/cameras) is triaging a queue.
+4. The new **Storage Usage** page (`view_reports` permission) shows a real breakdown
+   (snapshots/evidence clips/cloud vs. continuous recordings/event metadata) computed
+   from actual recorded file sizes — labeled "estimated" since it isn't a live query
+   against the object-storage provider's own billing API.
+5. A Platform Administrator (`SUPER_ADMIN`) manages the four named retention presets
+   (Starter/Business/Professional/Enterprise) and which tenant uses which via
+   `GET`/`PUT /api/retention-tiers` — no dedicated page yet, use the API directly or a
+   tool like `curl`/Postman.
+
 ### 1.11 Logs
 
 ```bash
@@ -343,8 +364,25 @@ frontend (React/TS dashboard)  +  mobile app (same API)
   pipeline as every other event type.
 ```
 
-Services (`docker-compose.yml`): `postgres`, `redis`, `backend`, `ai-engine`, `worker`
-(retention cleanup), `frontend`, `nginx` (reverse proxy + TLS termination).
+Services (`docker-compose.yml`): `postgres`, `redis`, `minio` (S3-compatible object
+storage for snapshots/evidence, real AWS S3 in production — see below), `minio-init`
+(one-shot bucket creation), `backend`, `ai-engine`, `worker` (retention cleanup,
+including expired cloud-stored evidence), `frontend`, `nginx` (reverse proxy + TLS
+termination).
+
+**Event-First Cloud Storage**: cameras belong to a `Site` (`Customer -> Site ->
+Camera`), and snapshots/evidence clips/non-continuous recordings upload to object
+storage (MinIO locally, real S3 in production — same code path, just a different
+`S3_ENDPOINT_URL`) instead of only living on local disk. The backend never proxies the
+actual file bytes: `GET /snapshots/{id}/image`, `/recordings/{id}/play`, and
+`/incidents/{id}/evidence-clip` issue a `307` redirect to a short-lived presigned URL
+once the platform's own auth/tenant checks pass — a still-local (pre-migration, or
+continuous-recording) file falls back to serving directly, so nothing existing breaks.
+How long each cloud artifact survives is governed by a per-tenant `RetentionTier`
+(Starter/Business/Professional/Enterprise, editable only by a Platform Administrator),
+enforced by `worker.py::cleanup_expired_cloud_evidence`. See `CLAUDE.md` for the full
+write-up, including the honest scope limits (no AWS Cost Explorer billing integration,
+no S3 lifecycle policies — those are deployment-time AWS config, not application code).
 
 ## 3. Local development (without Docker)
 
@@ -376,15 +414,23 @@ python -m app.main
 ## 4. Testing
 
 ```bash
-cd backend && .venv/bin/pytest -q   # 148 tests, including Facial Recognition, the
+cd backend && .venv/bin/pytest -q   # 200 tests, including Facial Recognition, the
                                      # violation-incident correlation, recording linkage,
-                                     # and AI Video Intelligence (gate-jumping/tailgating/
-                                     # restricted-area/theft, risk scoring, evidence clips)
-cd ai-engine && .venv/bin/pytest -q # 77 tests, including FaceRecognizer, SegmentRecorder,
+                                     # AI Video Intelligence (gate-jumping/tailgating/
+                                     # restricted-area/theft, risk scoring, evidence clips),
+                                     # and Event-First Cloud Storage (Sites, the object-
+                                     # storage boundary, retention tiers, event review/
+                                     # categorization/filtering, storage-usage aggregates)
+cd ai-engine && .venv/bin/pytest -q # 88 tests, including FaceRecognizer, SegmentRecorder,
                                      # the gate-jump/tailgating heuristics, the real
-                                     # multi-class YoloDetector's class mapping, and the
-                                     # AssetZoneTracker theft-detection heuristic
-cd worker && .venv/bin/pytest -q    # 6 tests, retention cleanup incl. face data
+                                     # multi-class YoloDetector's class mapping, the
+                                     # AssetZoneTracker theft-detection heuristic, and the
+                                     # object-storage client (key layout, internal-vs-
+                                     # public endpoint selection)
+cd worker && .venv/bin/pytest -q    # 16 tests, retention cleanup incl. face data and
+                                     # expired cloud-stored evidence (snapshots, cloud-
+                                     # uploaded recordings, incident evidence clips, and
+                                     # "quiet" events past their tenant's RetentionTier)
 cd frontend && npm run build      # type-checks + production build
 cd mobile && npx tsc --noEmit     # type-checks
 ```

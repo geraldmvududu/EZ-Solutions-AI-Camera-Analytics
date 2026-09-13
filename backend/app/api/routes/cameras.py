@@ -22,6 +22,8 @@ from app.models.detection import Detection
 from app.models.event import Event
 from app.models.face_recognition_event import FaceRecognitionEvent
 from app.models.face_settings import FaceRecognitionSettings
+from app.models.incident import Incident, incident_alerts
+from app.models.notification import Notification
 from app.models.video_intelligence_settings import VideoIntelligenceSettings
 from app.models.recording import Recording
 from app.models.rule import AIRule
@@ -199,10 +201,18 @@ def delete_camera(
     camera actually had dependent rows. Every dependent table is cleaned up explicitly
     here, in an order that respects the circular Event/Detection/Snapshot FK
     relationship (see app/models/detection.py's comment) by nulling those cross-
-    references out before deleting any of the three. AIRule is the one exception —
-    a rule outlives the camera it was scoped to, just unscoped (camera_id -> NULL),
-    since deleting someone's configured rule as a side effect of deleting a camera
-    would be a surprising, unrelated data loss."""
+    references out before deleting any of the three. AIRule/Incident are the two
+    exceptions — a rule/incident outlives the camera it was scoped to, just unscoped
+    (camera_id -> NULL), since deleting someone's configured rule or investigation
+    record as a side effect of deleting a camera would be a surprising, unrelated
+    data loss.
+
+    Real bug found live on the deployed VM (a genuine `notifications_alert_id_fkey`
+    ForeignKeyViolation, confirmed via `docker compose logs backend`): this function
+    originally deleted `Alert` rows without first nulling the `Notification` rows
+    (push/in-app feed) and `incident_alerts` join rows that reference them — harmless
+    on a fresh camera with no activity, but real usage generates both. Both are handled
+    below, in the same "unscope rather than destroy" spirit as AIRule/Incident."""
     camera = _get_owned_camera(db, camera_id, user)
 
     snapshot_paths = [
@@ -210,6 +220,12 @@ def delete_camera(
     ]
     recording_paths = [
         row[0] for row in db.query(Recording.file_path).filter(Recording.camera_id == camera_id).all()
+    ]
+    alert_ids = [
+        row[0] for row in db.query(Alert.id).filter(Alert.camera_id == camera_id).all()
+    ]
+    event_ids = [
+        row[0] for row in db.query(Event.id).filter(Event.camera_id == camera_id).all()
     ]
 
     db.query(Detection).filter(Detection.camera_id == camera_id).update(
@@ -219,6 +235,17 @@ def delete_camera(
         {"detection_id": None, "snapshot_id": None, "recording_id": None}, synchronize_session=False
     )
     db.query(Snapshot).filter(Snapshot.camera_id == camera_id).update({"event_id": None}, synchronize_session=False)
+
+    if alert_ids:
+        db.execute(incident_alerts.delete().where(incident_alerts.c.alert_id.in_(alert_ids)))
+        db.query(Notification).filter(Notification.alert_id.in_(alert_ids)).update(
+            {"alert_id": None}, synchronize_session=False
+        )
+    if event_ids:
+        db.query(Incident).filter(Incident.source_event_id.in_(event_ids)).update(
+            {"source_event_id": None}, synchronize_session=False
+        )
+    db.query(Incident).filter(Incident.camera_id == camera_id).update({"camera_id": None}, synchronize_session=False)
 
     db.query(FaceRecognitionEvent).filter(FaceRecognitionEvent.camera_id == camera_id).delete(synchronize_session=False)
     db.query(Alert).filter(Alert.camera_id == camera_id).delete(synchronize_session=False)

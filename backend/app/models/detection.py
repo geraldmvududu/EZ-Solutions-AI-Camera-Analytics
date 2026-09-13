@@ -44,8 +44,8 @@ class Detection(Base, UUIDPKMixin, TimestampMixin, TenantScopedMixin):
     # CREATE TABLE time but Postgres does. use_alter defers these specific constraints
     # to a separate ALTER TABLE, emitted after every table exists, breaking the cycle.
     snapshot_id: Mapped[uuid.UUID | None] = mapped_column(
-        ForeignKey("snapshots.id", use_alter=True, name="fk_detections_snapshot_id"), nullable=True
+        ForeignKey("snapshots.id", use_alter=True, name="fk_detections_snapshot_id"), nullable=True, index=True
     )
     recording_id: Mapped[uuid.UUID | None] = mapped_column(
-        ForeignKey("recordings.id", use_alter=True, name="fk_detections_recording_id"), nullable=True
+        ForeignKey("recordings.id", use_alter=True, name="fk_detections_recording_id"), nullable=True, index=True
     )

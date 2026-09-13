@@ -15,7 +15,7 @@ class Notification(Base, UUIDPKMixin, TimestampMixin, TenantScopedMixin):
     __tablename__ = "notifications"
 
     user_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id"), nullable=False, index=True)
-    alert_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("alerts.id"), nullable=True)
+    alert_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("alerts.id"), nullable=True, index=True)
     title: Mapped[str] = mapped_column(String(255), nullable=False)
     body: Mapped[str] = mapped_column(String(1000), nullable=False, default="")
     notification_type: Mapped[str] = mapped_column(String(50), nullable=False, default="ALERT")

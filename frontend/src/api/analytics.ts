@@ -62,3 +62,5 @@ export const downloadSecurityReportPdf = (params: Record<string, string> = {}) =
   const qs = new URLSearchParams(params).toString();
   return downloadAuthenticated(`/api/reports/security-report.pdf${qs ? `?${qs}` : ""}`, "security-report.pdf");
 };
+
+export const downloadEventPdf = (eventId: string) => downloadAuthenticated(`/api/reports/events/${eventId}.pdf`, `event-${eventId}.pdf`);

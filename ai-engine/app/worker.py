@@ -46,9 +46,26 @@ MONITORED_ASSET_TYPES = {"BACKPACK", "BAG", "SUITCASE"}
 NEARBY_PERSON_MAX_DISTANCE = 0.15
 
 # How long a MOTION/AI_EVENT recording keeps rolling after the last trigger before it
-# closes (there is no pre-roll buffer yet — see core/recorder.py).
-POST_TRIGGER_RECORD_SECONDS = 10
+# closes (there is no pre-roll buffer yet — see core/recorder.py). Real bug found live
+# on the deployed VM: one camera produced 57 separate recording segments in under 6
+# hours, most only tens of seconds long — a SIMULATED source's motion pattern (or any
+# camera whose detector briefly loses the object) creates a gap in tracked detections
+# just over the old 10s threshold, closing the current recording and opening a new one
+# for what is really the same ongoing scene. Widened to 30s so a brief gap merges into
+# one continuous recording instead of fragmenting into several near-identical ones.
+POST_TRIGGER_RECORD_SECONDS = 30
 CONTINUOUS_SEGMENT_SECONDS = 300
+
+# Real bug found live on the same VM: CentroidTracker briefly losing and re-acquiring
+# the same physical object hands out a new track_id, and _emit_object_event fires a
+# brand-new PERSON_DETECTED/VEHICLE_DETECTED/AI_DETECTION event — with its own
+# snapshot — every single time, even though it's really the same ongoing presence. The
+# same camera produced ~30k snapshots in under a day this way. This is the same
+# throttle _on_motion_detected already applies to MOTION_DETECTED, extended to
+# object-detection events for the same reason: a time-based cooldown, not a real "is
+# this the same image" comparison (this codebase has no frame-similarity check) — see
+# CLAUDE.md's "do not hallucinate accuracy we don't have" convention.
+OBJECT_EVENT_COOLDOWN_SECONDS = 30
 
 
 class CameraWorker:
@@ -80,6 +97,7 @@ class CameraWorker:
         self._last_tracked: dict[int, Detection] = {}
 
         self._last_heartbeat = 0.0
+        self._last_object_event_sent = 0.0
         self._last_motion_time = 0.0
         self._last_detection_time = 0.0
         self._segment_started_at = 0.0
@@ -212,6 +230,14 @@ class CameraWorker:
                 )
 
     def _emit_object_event(self, frame, detection, detection_id) -> None:
+        # See OBJECT_EVENT_COOLDOWN_SECONDS's docstring: a "new" track_id doesn't
+        # always mean a genuinely new appearance — this throttle prevents a tracker
+        # briefly losing/reacquiring the same object from spamming a fresh
+        # event+snapshot+recording-trigger every time it does.
+        if time.time() - self._last_object_event_sent < OBJECT_EVENT_COOLDOWN_SECONDS:
+            return
+        self._last_object_event_sent = time.time()
+
         event_type = "PERSON_DETECTED" if detection.object_type == "PERSON" else (
             "VEHICLE_DETECTED" if detection.object_type in VEHICLE_TYPES else "AI_DETECTION"
         )

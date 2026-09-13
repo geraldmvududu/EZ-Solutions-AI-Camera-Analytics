@@ -1,7 +1,7 @@
 import uuid
 from datetime import datetime, timedelta, timezone
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.responses import Response
 from sqlalchemy.orm import Session
 
@@ -13,8 +13,9 @@ from app.models.event import Event
 from app.models.face_recognition_event import FaceRecognitionEvent
 from app.models.tenant import Tenant
 from app.models.user import User
+from app.models.camera import Camera
 from app.services.analytics_service import get_analytics_summary, get_face_recognition_report_data, get_incident_type_report_data
-from app.services.report_service import alerts_to_csv, build_security_report_pdf, events_to_csv, face_appearances_to_csv
+from app.services.report_service import alerts_to_csv, build_event_detail_pdf, build_security_report_pdf, events_to_csv, face_appearances_to_csv
 
 router = APIRouter(prefix="/reports", tags=["reports"])
 
@@ -94,6 +95,26 @@ def export_face_appearances_csv(
         content=csv_content,
         media_type="text/csv",
         headers={"Content-Disposition": "attachment; filename=face-appearances.csv"},
+    )
+
+
+@router.get("/events/{event_id}.pdf")
+def export_event_detail_pdf(
+    event_id: uuid.UUID,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_permission(Permissions.VIEW_CAMERAS)),
+) -> Response:
+    event = db.get(Event, event_id)
+    tenant_id = tenant_filter_value(user)
+    if event is None or (tenant_id and event.tenant_id != tenant_id):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Event not found")
+
+    camera = db.get(Camera, event.camera_id)
+    pdf_bytes = build_event_detail_pdf(event, camera.name if camera else "Unknown camera")
+    return Response(
+        content=pdf_bytes,
+        media_type="application/pdf",
+        headers={"Content-Disposition": f"attachment; filename=event-{event_id}.pdf"},
     )
 
 

@@ -19,8 +19,10 @@ ai-engine/   OpenCV-based video capture, privacy-zone masking (applied first, be
              editing a zone takes effect within one discovery cycle, not a full
              ai-engine restart.
 worker/      Standalone retention-policy cleanup (deletes expired, non-evidence-locked
-             recordings/snapshots, face recognition events, and expired face profiles)
-             — plain SQL against the same Postgres DB
+             recordings/snapshots, face recognition events, expired face profiles, and
+             — per each tenant's configured RetentionTier — expired cloud-stored
+             snapshots/evidence recordings/incident evidence clips, deleting the
+             underlying MinIO/S3 object first) — plain SQL against the same Postgres DB
 frontend/    React + TypeScript + Vite + Tailwind SPA
 nginx/       Reverse proxy + TLS termination (self-signed cert generated on first run)
 mobile/      Not started — see "Known limitations"
@@ -399,6 +401,131 @@ this phase — it shares the same object-tracking foundation and would be a smal
 addition, but the user asked specifically for gate-jumping and theft, and adding
 unrequested detection categories isn't this project's convention. See limitation 17.
 
+**Event-First Cloud Storage, Phase 1** (`app/models/site.py`,
+`app/models/retention_tier.py`, `app/services/object_storage.py`,
+`app/services/storage_service.py`): a large architectural addition — real object
+storage, a `Site` hierarchy, per-tenant retention policy, and event review/filtering —
+deliberately scoped to integrate into the existing pipeline rather than build a
+parallel one (per the plan's own explicit "do not rebuild from scratch" instruction).
+Two upfront decisions, made explicitly rather than assumed: build against **local
+MinIO** first (a self-hosted, real S3-API-compatible server — not a fake/mock target)
+so the whole feature is genuinely testable without an AWS account, with the exact same
+code talking to real AWS S3 in production by changing only `S3_ENDPOINT_URL`/
+credentials; and add the **Site** model now rather than defer it, since it changes how
+camera scoping works everywhere.
+
+- `app/models/site.py`: `Site` (name/address/timezone/is_active) sits between `Tenant`
+  and `Camera` — `Camera.site_id` is nullable so existing cameras are unaffected (the
+  migration backfills one `"Default Site"` per tenant that already has cameras, so
+  nothing currently working stops working). CRUD lives at `app/api/routes/sites.py`,
+  gated by new `view_sites`/`manage_sites` permissions; deleting a site nulls
+  `Camera.site_id` for its cameras rather than deleting or blocking on them — a
+  camera's whole event/recording history is too significant to destroy as a side
+  effect of a site being removed.
+- `app/services/object_storage.py` (byte-for-byte duplicated at
+  `ai-engine/app/core/object_storage.py`, the same no-shared-package convention already
+  used for `face_embedding.py`): a thin `boto3` S3 client wrapper —
+  `upload_file`/`generate_presigned_url`/`delete_object`/`ensure_bucket_exists`, plus
+  `build_key(tenant_id, site_id, camera_id, artifact_type, filename)` implementing the
+  bucket layout `tenant-{id}/site-{id-or-"unassigned"}/camera-{id}/{snapshots|
+  video-clips}/{filename}`. **Real bug caught and fixed before it could ever manifest**:
+  a presigned URL signed against the internal Docker hostname (`S3_ENDPOINT_URL=
+  http://minio:9000`) would be completely unreachable from an actual end user's
+  browser. Fixed with a **second, separate** boto3 client (`_get_presign_client()`)
+  constructed against a distinct `s3_public_endpoint_url` config value, used only for
+  `generate_presigned_url` — every internal upload/delete/head-bucket call keeps using
+  the internal `s3_endpoint_url`. `s3_public_endpoint_url` defaults to
+  `http://localhost:9000` (correct only when Docker and the browser share one machine)
+  and must be set to the deployment's real reachable address otherwise — the exact same
+  per-deployment customization `API_URL`/`FRONTEND_URL` already need.
+- Snapshots always upload to cloud storage (they're small and are the spec's core
+  "evidence" concept); non-`CONTINUOUS` recordings (i.e. the already-short AI_EVENT/
+  MOTION ones) and incident evidence clips upload by default too. A plain `CONTINUOUS`
+  recording stays local-only unless the camera has the new
+  `Camera.cloud_recording_enabled` opt-in set (the spec's "Full Cloud Recording" premium
+  tier) — implemented, off by default. `ai-engine/app/core/snapshotter.py::save_snapshot`
+  and `ai-engine/app/core/recorder.py::SegmentRecorder` upload after writing the local
+  file (still needed for the ffmpeg trim step and existing local-file assumptions) and
+  report the resulting `storage_key` to the backend alongside the existing `file_path` —
+  a failed upload sets `storage_key=None` rather than raising, so the caller still has a
+  real local file to fall back to serving, exactly as before this phase.
+- Serving endpoints (`GET /snapshots/{id}/image`, `/recordings/{id}/play`,
+  `/incidents/{id}/evidence-clip`) changed from always `FileResponse`-ing the local path
+  to: if `storage_key` is set, a `307` redirect to a short-lived presigned GET URL;
+  else (no `storage_key` — a still-local continuous recording, or a pre-migration row)
+  fall back to today's `FileResponse` exactly as before. Because the existing query-
+  token/header auth already runs before this branch, and a redirect from an
+  authenticated response is transparent to `fetch()`/`<video src>`/`<img>` (browsers
+  correctly drop the original `Authorization` header on the cross-origin redirect,
+  which is fine since the presigned URL carries its own embedded auth) — **this
+  required zero frontend changes** for playback/viewing, the same "backend is the sole
+  access-control boundary, never expose storage credentials" principle already used for
+  the live-video proxy.
+- `app/models/retention_tier.py`: `RetentionTier` (name + event_metadata_days/
+  snapshot_days/video_evidence_days) is deliberately **not** tenant-scoped — a small,
+  named, platform-wide set of presets (Starter/Business/Professional/Enterprise, seeded
+  by the migration with the spec's own worked example values) a Platform Administrator
+  (`SUPER_ADMIN`) configures via `GET`/`PUT /api/retention-tiers`
+  (`app/api/routes/retention_tiers.py`), never hard-coded anywhere per the spec's
+  explicit requirement. `Tenant.retention_tier_id` picks one (defaults to `NULL` until
+  a migration/admin assigns it — `worker.py`'s cleanup simply skips a tenant with none
+  assigned, rather than guessing a default).
+- `worker/app.py::cleanup_expired_cloud_evidence` follows the exact per-tenant-cutoff-
+  computed-in-Python pattern `cleanup_face_recognition_events` already established
+  (portable, not Postgres-`interval`-specific): for each tenant with a `RetentionTier`
+  assigned, deletes `Snapshot` rows past `snapshot_days`, cloud-uploaded (`storage_key
+  IS NOT NULL`, unprotected) `Recording` rows past `video_evidence_days`, and clears
+  (not deletes) `Incident.evidence_clip_path`/`evidence_clip_storage_key` past the same
+  cutoff — each case calls a small, standalone boto3 delete helper (worker.py has no
+  `app.config` to import `object_storage.py` from, matching its existing plain-SQL/
+  stdlib convention) before removing the local reference. Event metadata past
+  `event_metadata_days` is deleted outright, but **deliberately conservatively**: an
+  `Event` still referenced by an `Alert` or `FaceRecognitionEvent` (both `NOT NULL`
+  foreign keys — every event that ever mattered enough to alert on or match a face
+  against) is never deleted even past its cutoff, since there's no safe way to null
+  those references without losing the record of what triggered them; only "quiet"
+  events with neither are actually purged, nulling `Incident.source_event_id`/
+  `Snapshot.event_id` first since those are nullable.
+- `app/models/event.py` gained `status`(UNREVIEWED/REVIEWED)/`reviewed_by_user_id`/
+  `reviewed_at`/`notes` — a plain `Event` (e.g. `PERSON_DETECTED`) never automatically
+  becomes an `Incident` (see `violation_service.py`'s always-incident dispatch), so
+  before this it had no review workflow of its own at all, only Incidents/Alerts did.
+  New `POST /events/{id}/review`/`POST /events/{id}/notes` endpoints (`manage_alerts`-
+  gated, mirroring the existing Incident/Alert status-update pattern). A new
+  `EventCategory` enum (SECURITY/PEOPLE/VEHICLES/SAFETY/OPERATIONS) is computed once at
+  event-creation time via `app/services/event_classification.py::classify_event` — a
+  static, transparent `EventType -> EventCategory` dict (plain Python, not an LLM call
+  or trained classifier, the same "do not hallucinate" convention `violation_service.py`
+  already established), stored as an indexed column so filtering by category is a real
+  indexed query rather than a per-row computation. `list_events` gained `event_category`/
+  `status` (aliased from the reserved word) query params; `Events.tsx` now sends real
+  camera/severity/category/review-status/date-range filters (confirmed via direct code
+  read to be a pure UI-wiring gap before this — the backend already had `camera_id`/
+  `event_type`/`severity`/`start`/`end` params the frontend simply never sent), and its
+  detail modal gained "Mark as Reviewed"/investigation-notes controls. `Alerts.tsx`
+  gained the same camera/severity/status filter dropdowns for the params `list_alerts`
+  already supported.
+- `app/services/storage_service.py::get_storage_usage` follows
+  `analytics_service.py`'s own `func.sum()`/`group_by()` convention: real
+  `SUM(file_size_bytes)` aggregates for snapshots, evidence clips, and cloud vs.
+  continuous recordings (split via `storage_key IS NOT NULL`/`IS NULL`). One honest,
+  explicitly disclosed exception: `event_metadata_bytes` is **not** a real sum (`Event`
+  rows have no stored-file size to sum) — a flat per-row estimate constant times a real
+  row count, which is why `StorageUsageResponse.is_estimate` is always `True` even
+  though every other figure is a genuine aggregate. `GET /api/storage/usage`
+  (`view_reports`-gated) backs the new `StorageUsage.tsx` dashboard page, which labels
+  itself "estimated" for the same reason.
+- New `SECURITY_MANAGER` role (`app/core/permissions.py`) sits between Operator and
+  Admin — can investigate events/evidence and view reports (same as Operator) plus
+  `manage_sites`, but unlike Admin cannot manage cameras/users/AI configuration/
+  retention policy. Picked up automatically by the existing idempotent
+  `scripts/bootstrap.py` seeding loop (it already iterates whatever's in
+  `ROLE_PERMISSION_MAP`) — zero new seeding code needed.
+- Explicitly out of scope for this phase (see "Known limitations" below): email/SMS/
+  webhook alerts, an offline edge queue-and-sync, a generalized event-deduplication/
+  cooldown config framework, per-user site-level RBAC, S3 lifecycle/archival policies,
+  and AWS Cost Explorer billing integration.
+
 ## Development commands
 
 ```bash
@@ -421,7 +548,7 @@ cd ai-engine && python -m app.main
 ## Testing commands
 
 ```bash
-cd backend && pytest -q      # 148 tests: auth, RBAC, tenant isolation, camera CRUD
+cd backend && pytest -q      # 200 tests: auth, RBAC, tenant isolation, camera CRUD
                               # (including the delete cascade covering every dependent
                               # table), credential encryption, rule engine, analytics
                               # aggregates, report export, the Redis-backed rate limiter
@@ -455,9 +582,17 @@ cd backend && pytest -q      # 148 tests: auth, RBAC, tenant isolation, camera C
                               # CameraInternalResponse, the ASSET_ZONE zone type,
                               # theft_detection_enabled, and the always-incident path
                               # for POTENTIAL_THEFT_DETECTED with/without a recognized
-                              # nearby person) — all against a real in-memory SQLite DB
-                              # through the actual FastAPI app
-cd ai-engine && pytest -q    # 77 tests: centroid tracker (including type-aware
+                              # nearby person), and Event-First Cloud Storage Phase 1
+                              # (Site CRUD + tenant isolation + camera site_id round-
+                              # tripping, the object_storage client's internal-vs-
+                              # public presigned endpoint split with boto3 mocked at
+                              # the network boundary, RetentionTier CRUD + the
+                              # SUPER_ADMIN-only gate, event review/notes endpoints +
+                              # event_category computed per type + category/status
+                              # list filters, and the storage-usage aggregate hand-
+                              # verified against real seeded file sizes) — all against
+                              # a real in-memory SQLite DB through the actual FastAPI app
+cd ai-engine && pytest -q    # 88 tests: centroid tracker (including type-aware
                               # matching so a multi-class detector can't let a track
                               # of one object_type steal another's), zone/tripwire
                               # geometry, loitering timer, motion detection (real MOG2 background
@@ -484,11 +619,22 @@ cd ai-engine && pytest -q    # 77 tests: centroid tracker (including type-aware
                               # AssetZoneTracker's dwell-then-exit logic, and the
                               # CameraWorker._check_zones ASSET_ZONE wiring including
                               # the nearby-person identity attribution, exercised
-                              # directly against a real CameraWorker instance)
-cd worker && pytest -q       # 6 tests: retention cleanup for recordings/snapshots/
+                              # directly against a real CameraWorker instance), and the
+                              # Event-First Cloud Storage object_storage client (key
+                              # layout, internal-vs-public presigned endpoint split,
+                              # upload/delete/presign/ensure-bucket-exists — boto3.client
+                              # itself mocked at the network boundary)
+cd worker && pytest -q       # 16 tests: retention cleanup for recordings/snapshots/
                               # face-recognition-events/face-profiles against a real
-                              # SQLite DB with a hand-crafted minimal schema — the
-                              # service's first-ever tests (previously untested)
+                              # SQLite DB with a hand-crafted minimal schema (the
+                              # service's first-ever tests), plus
+                              # cleanup_expired_cloud_evidence (per-tenant RetentionTier
+                              # cutoffs for snapshots/cloud-uploaded recordings/incident
+                              # evidence clips — each calling a mocked S3 delete before
+                              # removing the row — the FK-safe nulling of live Event/
+                              # Detection/Incident references before a delete, never
+                              # purging an Event still referenced by an Alert or
+                              # FaceRecognitionEvent, and per-tenant tier isolation)
 cd frontend && npm run build # TypeScript strict-mode compile + production bundle
 ```
 
@@ -520,6 +666,15 @@ Facial-recognition-specific: `FACE_EMBEDDING_ENCRYPTION_KEY` (must differ from
 the tenant's own admin-configured values in Settings take over after that; only
 `FACE_EVENT_COOLDOWN`/`FACE_MIN_QUALITY` are still read live by ai-engine, see
 limitation 13), `FACE_PATH` (`/data/faces`, enrolled-photo storage).
+Event-First Cloud Storage: `S3_ENDPOINT_URL` (MinIO's internal Docker address in dev,
+`http://minio:9000`; **leave unset** in real AWS so boto3 falls back to the real
+regional S3 endpoint), `S3_PUBLIC_ENDPOINT_URL` (the address a real user's *browser*
+can reach for presigned URLs — never the same as `S3_ENDPOINT_URL` once backend and
+browser aren't on the same machine; **must** be set to the deployment's real reachable
+address, the same per-deployment customization `API_URL`/`FRONTEND_URL` already need),
+`AWS_ACCESS_KEY_ID`/`AWS_SECRET_ACCESS_KEY` (MinIO's root credentials in dev; a real,
+narrowly-scoped IAM key in production — never reuse a broader-privileged credential),
+`AWS_REGION`, `AWS_S3_BUCKET`.
 
 ## Coding standards
 
@@ -707,6 +862,36 @@ limitation 13), `FACE_PATH` (`/data/faces`, enrolled-photo storage).
    is video-only), and true scheduled/emailed daily/weekly AI security reports (no
    email channel exists anywhere in this codebase — only WebSocket dashboard + Expo
    push do; the PDF/CSV reports are on-demand, not autonomously emailed).
+20. **Event-First Cloud Storage — explicitly out of scope for Phase 1** (documented,
+   not silently dropped, matching this project's own phased-delivery discipline):
+   multi-channel alerts beyond WebSocket + Expo push (no email/SMS/webhook channel
+   exists anywhere in this codebase, same underlying gap as limitation 19's last
+   sentence); an offline edge queue-and-sync (today's ai-engine -> backend calls
+   already fail silently with no retry — a real persistent local queue is a
+   substantial standalone feature); a generalized, configurable event-deduplication/
+   cooldown framework (today's per-feature throttles — motion's 30s throttle,
+   `LoiteringTracker`'s one-shot-per-stay — stay exactly as they are); per-user
+   site-level RBAC (a user is scoped to their tenant's sites, not a subset of them);
+   S3 lifecycle/archival-storage policies (an AWS console/Terraform deployment
+   concern, not application code); and AWS Cost Explorer billing integration (the
+   storage dashboard sums real recorded file sizes, clearly labeled as an estimate,
+   rather than querying AWS's billing API — this environment has no AWS billing
+   credentials to do so even if it were in scope).
+21. **RetentionTier has no per-tenant default assignment path yet**: a brand-new
+   tenant's `retention_tier_id` is `NULL` until a `SUPER_ADMIN` explicitly assigns one
+   via `PUT /api/retention-tiers/assign/{tenant_id}` — `worker.py::
+   cleanup_expired_cloud_evidence` simply skips a tenant with none assigned (never
+   guesses a default), so a forgotten assignment means that tenant's cloud evidence
+   never expires until someone notices and assigns a tier. The migration itself only
+   backfills existing pre-Phase-1 tenants to `"starter"`; a tenant created after the
+   migration has no such backfill.
+22. **Retention enforcement for cloud evidence is worker-cycle-based, not
+   instantaneous**: `cleanup_expired_cloud_evidence` runs on the same
+   `RETENTION_CHECK_INTERVAL_SECONDS` loop as every other retention job (default one
+   hour) — an artifact can outlive its configured retention window by up to one cycle
+   before it's actually purged. Same characteristic the pre-existing
+   `cleanup_recordings`/`cleanup_snapshots`/`cleanup_face_recognition_events` jobs
+   already have; not a new gap introduced by this phase.
 
 ## Current implementation status
 
@@ -723,6 +908,7 @@ limitation 13), `FACE_PATH` (`/data/faces`, enrolled-photo storage).
 | 9. Production hardening (real TLS, Redis rate limit, perf) | Redis-backed rate limiting done; real-TLS automation done (`scripts/setup-letsencrypt.sh`, needs the user's own domain to run) |
 | 10. Facial Recognition & Identity Analytics | Phase 1 + Phase 2 done, tested, verified in a real browser — enroll/manage people, real detect→embed→match pipeline, recognition events feeding the existing event/alert/rule/notification/WebSocket pipeline, camera + zone config, human review, identified-person violation → auto-Incident, recordings linked to face/violation events with in-browser seekable playback, multi-frame confirmation, liveness (narrow scope, limitation 12), retention enforcement, and a CSV appearance-history export. Full drag-and-drop rules-builder UI is still out of scope (rules are managed via the existing generic Rules page) |
 | 11. AI Video Intelligence | Phase 1 + Phase 2 done, tested, verified in a real browser — gate-jumping/climbing (heuristic), tailgating, restricted-area, and now potential-theft detection (real YOLOv8n multi-class detector, opt-in per camera; backpack/handbag/suitcase removal from a monitored zone) extending the existing tripwire/zone pipeline; a real, transparent risk score; auto-created Incidents with a template-based (not LLM) AI summary; real ffmpeg-trimmed evidence clips; a dashboard and settings page; a PDF report section. Abandoned-object detection (not requested) and fall detection (Phase 3, needs pose estimation) are deliberately not built yet — see limitations 17-19 |
+| 12. Event-First Cloud Storage | Phase 1 done, tested — Site hierarchy (Customer → Site → Camera), a real object-storage abstraction (MinIO in dev / real AWS S3 in production, same code path) with presigned-URL serving, configurable per-tenant retention tiers with worker-side enforcement, per-event review/notes/categorization with real filter UI on Events/Alerts, a storage-usage dashboard, and a new SECURITY_MANAGER role. See limitations 20-22 for the explicit out-of-scope list (multi-channel alerts, offline edge queue-and-sync, generalized dedup/cooldown config, per-user site-level RBAC, S3 lifecycle policies, AWS Cost Explorer billing) |
 
 ## Verified end-to-end (not just "should work")
 

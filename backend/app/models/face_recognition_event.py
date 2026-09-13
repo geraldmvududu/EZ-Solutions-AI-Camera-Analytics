@@ -36,8 +36,8 @@ class FaceRecognitionEvent(Base, UUIDPKMixin, TimestampMixin, TenantScopedMixin)
     model_version: Mapped[str] = mapped_column(String(50), nullable=False, default="")
 
     event_timestamp: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, index=True)
-    snapshot_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("snapshots.id"), nullable=True)
-    recording_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("recordings.id"), nullable=True)
+    snapshot_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("snapshots.id"), nullable=True, index=True)
+    recording_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("recordings.id"), nullable=True, index=True)
 
     reviewed: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False, index=True)
     review_decision: Mapped[str] = mapped_column(String(30), nullable=False, default="")  # CONFIRMED/REJECTED/FALSE_POSITIVE/ESCALATED

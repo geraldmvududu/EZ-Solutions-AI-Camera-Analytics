@@ -1,15 +1,106 @@
 import { useEffect, useState, type FormEvent } from "react";
 import { Layout } from "../components/layout/Layout";
 import { SeverityBadge } from "../components/ui/Badge";
+import { ConfirmDialog } from "../components/ui/ConfirmDialog";
 import * as rulesApi from "../api/misc";
 import type { AIRule } from "../api/misc";
+
+const EVENT_TYPES = ["PERSON_DETECTED", "VEHICLE_DETECTED", "MOTION_DETECTED", "TRIPWIRE_VIOLATION", "INTRUSION_DETECTED", "LOITERING_DETECTED"];
+const SEVERITIES = ["INFO", "LOW", "MEDIUM", "HIGH", "CRITICAL"];
+
+function RuleFormModal({ rule, onClose, onSaved }: { rule: AIRule | null; onClose: () => void; onSaved: () => void }) {
+  const existingEventType = typeof rule?.conditions.event_type === "string" ? rule.conditions.event_type : "PERSON_DETECTED";
+  const [name, setName] = useState(rule?.name ?? "");
+  const [eventType, setEventType] = useState(existingEventType);
+  const [severity, setSeverity] = useState(rule?.action_severity ?? "HIGH");
+  const [isEnabled, setIsEnabled] = useState(rule?.is_enabled ?? true);
+  const [error, setError] = useState<string | null>(null);
+  const [submitting, setSubmitting] = useState(false);
+
+  async function handleSubmit(e: FormEvent) {
+    e.preventDefault();
+    setSubmitting(true);
+    setError(null);
+    try {
+      if (rule) {
+        await rulesApi.updateRule(rule.id, {
+          name,
+          conditions: { event_type: eventType },
+          action_severity: severity,
+          is_enabled: isEnabled,
+        });
+      } else {
+        await rulesApi.createRule({
+          name,
+          conditions: { event_type: eventType },
+          action_severity: severity,
+          action_alert_type: eventType,
+        });
+      }
+      onSaved();
+      onClose();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to save rule");
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  return (
+    <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4">
+      <form onSubmit={handleSubmit} className="bg-base-900 border border-base-700 rounded-lg w-full max-w-md p-5 space-y-3">
+        <h3 className="font-semibold text-slate-100 mb-2">{rule ? "Edit Rule" : "Add Rule"}</h3>
+        {error && <div className="text-sm text-severity-critical">{error}</div>}
+
+        <div>
+          <label className="block text-xs text-slate-400 mb-1">Name</label>
+          <input required value={name} onChange={(e) => setName(e.target.value)} className="w-full rounded bg-base-800 border border-base-600 px-3 py-1.5 text-sm text-slate-100" />
+        </div>
+        <div>
+          <label className="block text-xs text-slate-400 mb-1">Trigger event type</label>
+          <select value={eventType} onChange={(e) => setEventType(e.target.value)} className="w-full rounded bg-base-800 border border-base-600 px-3 py-1.5 text-sm text-slate-100">
+            {EVENT_TYPES.map((t) => (
+              <option key={t} value={t}>
+                {t.replace(/_/g, " ")}
+              </option>
+            ))}
+          </select>
+        </div>
+        <div>
+          <label className="block text-xs text-slate-400 mb-1">Alert severity</label>
+          <select value={severity} onChange={(e) => setSeverity(e.target.value)} className="w-full rounded bg-base-800 border border-base-600 px-3 py-1.5 text-sm text-slate-100">
+            {SEVERITIES.map((s) => (
+              <option key={s} value={s}>
+                {s}
+              </option>
+            ))}
+          </select>
+        </div>
+        {rule && (
+          <label className="flex items-center gap-2 text-sm text-slate-300">
+            <input type="checkbox" checked={isEnabled} onChange={(e) => setIsEnabled(e.target.checked)} />
+            Enabled
+          </label>
+        )}
+
+        <div className="flex justify-end gap-2 pt-2">
+          <button type="button" onClick={onClose} className="px-3 py-1.5 text-sm rounded border border-base-600 text-slate-300">
+            Cancel
+          </button>
+          <button type="submit" disabled={submitting} className="px-3 py-1.5 text-sm rounded bg-accent-600 hover:bg-accent-500 text-white disabled:opacity-50">
+            {submitting ? "Saving..." : rule ? "Save" : "Create"}
+          </button>
+        </div>
+      </form>
+    </div>
+  );
+}
 
 export function RulesPage() {
   const [rules, setRules] = useState<AIRule[]>([]);
   const [showForm, setShowForm] = useState(false);
-  const [name, setName] = useState("");
-  const [eventType, setEventType] = useState("PERSON_DETECTED");
-  const [severity, setSeverity] = useState("HIGH");
+  const [editingRule, setEditingRule] = useState<AIRule | null>(null);
+  const [deleteTarget, setDeleteTarget] = useState<AIRule | null>(null);
 
   function load() {
     rulesApi.listRules().then(setRules).catch(() => {});
@@ -17,21 +108,20 @@ export function RulesPage() {
 
   useEffect(load, []);
 
-  async function handleCreate(e: FormEvent) {
-    e.preventDefault();
-    await rulesApi.createRule({
-      name,
-      conditions: { event_type: eventType },
-      action_severity: severity,
-      action_alert_type: "RULE_MATCH",
-    });
-    setShowForm(false);
-    setName("");
-    load();
+  function openCreate() {
+    setEditingRule(null);
+    setShowForm(true);
   }
 
-  async function handleDelete(id: string) {
-    await rulesApi.deleteRule(id);
+  function openEdit(rule: AIRule) {
+    setEditingRule(rule);
+    setShowForm(true);
+  }
+
+  async function confirmDelete() {
+    if (!deleteTarget) return;
+    await rulesApi.deleteRule(deleteTarget.id);
+    setDeleteTarget(null);
     load();
   }
 
@@ -39,7 +129,7 @@ export function RulesPage() {
     <Layout title="Rules">
       <div className="flex justify-between items-center mb-4">
         <div className="text-sm text-slate-400">{rules.length} rule(s) configured</div>
-        <button onClick={() => setShowForm(true)} className="px-3 py-1.5 text-sm rounded bg-accent-600 hover:bg-accent-500 text-white">
+        <button onClick={openCreate} className="px-3 py-1.5 text-sm rounded bg-accent-600 hover:bg-accent-500 text-white">
           + Add Rule
         </button>
       </div>
@@ -65,9 +155,14 @@ export function RulesPage() {
                 </td>
                 <td className="px-4 py-2 text-slate-400">{r.is_enabled ? "Yes" : "No"}</td>
                 <td className="px-4 py-2">
-                  <button onClick={() => handleDelete(r.id)} className="text-severity-critical hover:underline text-xs">
-                    Delete
-                  </button>
+                  <div className="flex items-center gap-3">
+                    <button onClick={() => openEdit(r)} className="text-accent-500 hover:underline text-xs">
+                      Edit
+                    </button>
+                    <button onClick={() => setDeleteTarget(r)} className="text-severity-critical hover:underline text-xs">
+                      Delete
+                    </button>
+                  </div>
                 </td>
               </tr>
             ))}
@@ -82,44 +177,15 @@ export function RulesPage() {
         </table>
       </div>
 
-      {showForm && (
-        <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4">
-          <form onSubmit={handleCreate} className="bg-base-900 border border-base-700 rounded-lg w-full max-w-md p-5 space-y-3">
-            <h3 className="font-semibold text-slate-100 mb-2">Add Rule</h3>
-            <div>
-              <label className="block text-xs text-slate-400 mb-1">Name</label>
-              <input required value={name} onChange={(e) => setName(e.target.value)} className="w-full rounded bg-base-800 border border-base-600 px-3 py-1.5 text-sm text-slate-100" />
-            </div>
-            <div>
-              <label className="block text-xs text-slate-400 mb-1">Trigger event type</label>
-              <select value={eventType} onChange={(e) => setEventType(e.target.value)} className="w-full rounded bg-base-800 border border-base-600 px-3 py-1.5 text-sm text-slate-100">
-                {["PERSON_DETECTED", "VEHICLE_DETECTED", "MOTION_DETECTED", "TRIPWIRE_VIOLATION", "INTRUSION_DETECTED", "LOITERING_DETECTED"].map((t) => (
-                  <option key={t} value={t}>
-                    {t.replace(/_/g, " ")}
-                  </option>
-                ))}
-              </select>
-            </div>
-            <div>
-              <label className="block text-xs text-slate-400 mb-1">Alert severity</label>
-              <select value={severity} onChange={(e) => setSeverity(e.target.value)} className="w-full rounded bg-base-800 border border-base-600 px-3 py-1.5 text-sm text-slate-100">
-                {["INFO", "LOW", "MEDIUM", "HIGH", "CRITICAL"].map((s) => (
-                  <option key={s} value={s}>
-                    {s}
-                  </option>
-                ))}
-              </select>
-            </div>
-            <div className="flex justify-end gap-2 pt-2">
-              <button type="button" onClick={() => setShowForm(false)} className="px-3 py-1.5 text-sm rounded border border-base-600 text-slate-300">
-                Cancel
-              </button>
-              <button type="submit" className="px-3 py-1.5 text-sm rounded bg-accent-600 hover:bg-accent-500 text-white">
-                Create
-              </button>
-            </div>
-          </form>
-        </div>
+      {showForm && <RuleFormModal rule={editingRule} onClose={() => setShowForm(false)} onSaved={load} />}
+
+      {deleteTarget && (
+        <ConfirmDialog
+          title="Delete rule"
+          message={`Delete "${deleteTarget.name}"? Alerts it already created are kept; it will simply stop matching new events.`}
+          onConfirm={confirmDelete}
+          onCancel={() => setDeleteTarget(null)}
+        />
       )}
     </Layout>
   );
