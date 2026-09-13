@@ -37,3 +37,21 @@ def test_assess_enrollment_quality_rejects_multiple_faces(monkeypatch):
     result = face_embedding.assess_enrollment_quality(_structured_image(), 0.0)
     assert result.passed is False
     assert "Multiple faces" in result.reason
+
+
+def _sharp_edge_image(size: int) -> np.ndarray:
+    img = np.zeros((size, size), dtype=np.uint8)
+    for r in range(size // 20, size // 2, max(1, size // 15)):
+        cv2.circle(img, (size // 2, size // 2), r, 255, max(1, size // 100))
+    return img
+
+
+def test_blur_score_is_scale_invariant_for_a_genuinely_sharp_image():
+    # Same real bug as backend/tests/test_face_embedding.py — this copy must behave
+    # identically, since it's the byte-identical duplicate face_embedding.py used by
+    # live per-frame recognition here.
+    small = face_embedding._blur_score(_sharp_edge_image(150))
+    large = face_embedding._blur_score(_sharp_edge_image(900))
+    assert small > 0.8
+    assert large > 0.8
+    assert abs(small - large) < 0.25

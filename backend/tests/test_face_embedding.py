@@ -67,6 +67,39 @@ def test_assess_enrollment_quality_rejects_blurry_flat_image(monkeypatch):
     assert "blurry" in result.reason.lower()
 
 
+def _sharp_edge_image(size: int) -> np.ndarray:
+    # A real photo's sharpness is a property of the image content, not its pixel
+    # dimensions — a genuinely sharp face crop should score similarly whether it came
+    # from a small or a large photo. Concentric rings give real, unambiguous edges at
+    # any resolution (unlike flat noise, which trivially maxes out any resolution).
+    img = np.zeros((size, size), dtype=np.uint8)
+    for r in range(size // 20, size // 2, max(1, size // 15)):
+        cv2.circle(img, (size // 2, size // 2), r, 255, max(1, size // 100))
+    return img
+
+
+def test_blur_score_is_scale_invariant_for_a_genuinely_sharp_image():
+    # Real bug found and fixed: computed on the raw crop, cv2.Laplacian(...).var() is
+    # NOT scale-invariant — the exact same real, sharp phone-camera photo scored 0.31
+    # ("too blurry") at its native 742x742 face-crop size but a perfect 1.0 once
+    # downscaled to ~220px, purely from resolution, not any real change in sharpness.
+    # This was silently rejecting real enrollment photos: modern phone cameras produce
+    # large face crops, while the unit tests' 200x200 synthetic fixtures never
+    # exercised any other size, so the scale-dependence went unnoticed. Fixed by
+    # normalizing every crop to a fixed reference size before scoring.
+    small = face_embedding._blur_score(_sharp_edge_image(150))
+    large = face_embedding._blur_score(_sharp_edge_image(900))
+    assert small > 0.8
+    assert large > 0.8
+    assert abs(small - large) < 0.25
+
+
+def test_blur_score_still_rejects_a_genuinely_blurred_image():
+    sharp = _sharp_edge_image(600)
+    blurred = cv2.GaussianBlur(sharp, (31, 31), 20)
+    assert face_embedding._blur_score(blurred) < 0.1
+
+
 def test_assess_recognition_quality_picks_largest_face_without_rejecting(monkeypatch):
     big = face_embedding.DetectedFace(0, 0, 150, 150)
     small = face_embedding.DetectedFace(150, 150, 20, 20)

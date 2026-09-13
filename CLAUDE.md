@@ -198,6 +198,48 @@ analytics aggregate here, not a Python loop over loaded rows) -- gated behind th
 `view_biometric_events` permission the CSV export already requires, so a user without
 it gets a complete report minus that one section rather than a 403 on the whole PDF.
 
+**Two real bugs found and fixed: enrolled-photo blur rejection and photo-path
+persistence.** Reported by the user as "Enrolled People Photo tab not showing images
+of enrolled people." Reproduced for real with two actual phone-camera photos (not
+synthetic test fixtures) posted through the real `/api/faces/enroll` endpoint:
+
+1. **`face_embedding.py::_blur_score` was not scale-invariant.** It runs
+   `cv2.Laplacian(...).var()` directly on the raw face crop, and that variance scales
+   with the crop's own resolution — the identical, genuinely sharp real photo scored
+   0.31 ("too blurry", rejected) at its native 742x742px face crop but a perfect 1.0
+   once downscaled to ~220px, with zero actual change in sharpness. Modern phone
+   cameras produce large face crops, so real enrollment photos were being rejected as
+   blurry essentially at random depending on resolution, while the unit tests' small
+   (200x200) synthetic noise fixture always trivially passed regardless, so this never
+   surfaced there. Fixed by resizing every crop to a fixed reference size before
+   scoring, making the metric comparable regardless of the uploaded photo's
+   resolution (`ai-engine/tests/test_face_embedding.py`/`backend/tests/
+   test_face_embedding.py::test_blur_score_is_scale_invariant_for_a_genuinely_
+   sharp_image`, plus a regression test confirming a genuinely blurred image is still
+   correctly rejected). Applied identically to both byte-identical copies of
+   `face_embedding.py`.
+2. **`FaceProfile.image_reference` was stored as a relative path.**
+   `settings.face_path` defaults to `"./data/faces"` (only guaranteed absolute in
+   Docker, via `.env.example`'s `FACE_PATH=/data/faces`); the enroll route joined the
+   person's photo path onto that relative string and stored the result as-is. Every
+   subsequent read (`GET /faces/{id}/photo`) re-resolves that relative path against
+   whatever the CURRENT process's working directory happens to be — which silently
+   breaks every previously-enrolled photo the moment the backend is next started from
+   a different cwd (e.g. `cd backend && uvicorn ...` vs. a tool that launches uvicorn
+   from the repo root with `--app-dir backend` — this project's own documented
+   personal-local-dev-loop quirk already noted elsewhere for the SQLite DB path).
+   Fixed going forward by resolving to an absolute path with `os.path.abspath()` at
+   enrollment time (a no-op when `FACE_PATH` is already absolute, as in Docker).
+   Already-affected rows need a one-time repair:
+   `backend/scripts/fix_relative_face_paths.py` finds any stored relative path, tries
+   every working directory this project's documented dev/deploy commands could
+   plausibly have run from, and rewrites the row to the absolute path it actually
+   finds on disk — leaving anything it can't resolve untouched and reported rather
+   than guessed at. Verified for real: enrolled a person, confirmed the stored path
+   was absolute and the photo rendered in the browser, then (separately, against a
+   dev-DB copy still carrying the old relative-path bug) ran the repair script and
+   confirmed the same photo kept rendering afterward.
+
 **AI Video Intelligence, Phase 1** (`app/services/violation_service.py`,
 `ai-engine/app/core/tripwire_analysis.py`): extends the existing tripwire/zone
 pipeline rather than adding a parallel detection system — nearly everything the
@@ -361,16 +403,19 @@ cd ai-engine && python -m app.main
 ## Testing commands
 
 ```bash
-cd backend && pytest -q      # 140 tests: auth, RBAC, tenant isolation, camera CRUD
+cd backend && pytest -q      # 143 tests: auth, RBAC, tenant isolation, camera CRUD
                               # (including the delete cascade covering every dependent
                               # table), credential encryption, rule engine, analytics
                               # aggregates, report export, the Redis-backed rate limiter
                               # (fakeredis, including the internal-service-token
                               # exemption), push notifications (Expo API call mocked),
                               # facial recognition (enrollment quality gates/duplicate
-                              # detection, the real LBP algorithm unmocked, recognition
-                              # matching, person_category/status rule conditions, tenant
-                              # isolation of biometric data, audit logging), the
+                              # detection, the real LBP algorithm unmocked, the blur-
+                              # score's scale-invariance fix, the enrolled-photo path
+                              # being stored absolute and surviving a simulated cwd
+                              # change, recognition matching, person_category/status
+                              # rule conditions, tenant isolation of biometric data,
+                              # audit logging), the
                               # identified-person violation -> auto-Incident correlation,
                               # recording_id propagating Event -> Alert -> Incident,
                               # multi-frame confirmation's pending/confirm logic, the
@@ -393,7 +438,7 @@ cd backend && pytest -q      # 140 tests: auth, RBAC, tenant isolation, camera C
                               # for POTENTIAL_THEFT_DETECTED with/without a recognized
                               # nearby person) — all against a real in-memory SQLite DB
                               # through the actual FastAPI app
-cd ai-engine && pytest -q    # 76 tests: centroid tracker (including type-aware
+cd ai-engine && pytest -q    # 77 tests: centroid tracker (including type-aware
                               # matching so a multi-class detector can't let a track
                               # of one object_type steal another's), zone/tripwire
                               # geometry, loitering timer, motion detection (real MOG2 background
@@ -887,3 +932,22 @@ limitation 13), `FACE_PATH` (`/data/faces`, enrolled-photo storage).
   trigger was simulated via a seeded event rather than genuine pixels, since no such
   fixture exists in this environment. `cd backend && pytest -q` (140),
   `cd ai-engine && pytest -q` (76), and `cd frontend && npm run build` all green.
+- **Enrolled-photo bug fixes, end-to-end against a real (unmocked) backend.** Reported
+  by the user as "Enrolled People Photo tab not showing images of enrolled people."
+  Posted two real phone-camera photos (not synthetic test fixtures) to the actual
+  `POST /api/faces/enroll` endpoint — both were rejected with `"Image is too blurry"`
+  despite being genuinely sharp, confirming the report and pinpointing
+  `_blur_score`'s resolution-dependence for real: the identical photo's face crop
+  scored 0.31 (rejected) at its native 742x742px and 1.0 (a perfect score) once
+  downscaled to ~220px with a quick standalone script, before any code changed.
+  After fixing `_blur_score` to normalize against a reference crop size, the exact
+  same two real photos enrolled successfully (quality scores 0.89 and, separately,
+  passing outright), and the resulting photo rendered correctly in the Enrolled
+  People page's Photo column in a real browser. Separately reproduced the path-
+  persistence bug by inspecting the raw SQLite row: `image_reference` was stored as
+  `'./data/faces\\<tenant>\\<person>.jpg'` — a relative path — confirming it as a
+  second real, independent contributing cause. After fixing the enroll route to store
+  an absolute path, ran the new `fix_relative_face_paths` repair script against that
+  same already-affected row and confirmed it rewrote the path to the correct absolute
+  location — the same photo kept rendering in the browser afterward, unchanged.
+  `cd backend && pytest -q` (143) and `cd ai-engine && pytest -q` (77) both green.

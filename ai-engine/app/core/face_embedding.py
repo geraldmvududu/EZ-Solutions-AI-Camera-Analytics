@@ -74,11 +74,25 @@ def detect_faces(frame_bgr: np.ndarray) -> list[DetectedFace]:
     return faces
 
 
+_BLUR_REFERENCE_SIZE = 200
+
+
 def _blur_score(gray_crop: np.ndarray) -> float:
     # Variance of the Laplacian is a standard, widely-used sharpness proxy — low
     # variance means few sharp edges, i.e. a blurry image. 500.0 is an empirical
-    # reference for "acceptably sharp" at this crop size, not a calibrated constant.
-    variance = cv2.Laplacian(gray_crop, cv2.CV_64F).var()
+    # reference for "acceptably sharp", calibrated at _BLUR_REFERENCE_SIZE.
+    #
+    # Real bug found and fixed: computed directly on the raw face crop, this score is
+    # NOT scale-invariant — the same genuinely sharp photo scores dramatically lower
+    # the larger the crop is (a real 742x742px phone-camera face crop scored 0.31 —
+    # "too blurry" — while the identical photo downscaled to 220px scored a perfect
+    # 1.0). Modern phone cameras produce large face crops, so this was rejecting real,
+    # sharp enrollment photos as blurry while the unit tests' small (200x200) synthetic
+    # noise fixture always passed trivially regardless of the bug. Normalizing every
+    # crop to a fixed reference size before scoring makes the metric comparable
+    # regardless of the uploaded photo's resolution.
+    resized = cv2.resize(gray_crop, (_BLUR_REFERENCE_SIZE, _BLUR_REFERENCE_SIZE))
+    variance = cv2.Laplacian(resized, cv2.CV_64F).var()
     return float(min(1.0, variance / 500.0))
 
 

@@ -154,7 +154,17 @@ async def enroll_face(
     db.commit()
     db.refresh(person)
 
-    person_dir = os.path.join(settings.face_path, str(user.tenant_id))
+    # Real bug found and fixed: settings.face_path defaults to a relative "./data/faces"
+    # (an absolute path is only guaranteed in Docker, via FACE_PATH=/data/faces in
+    # .env.example). Storing that relative path as-is in image_reference means it gets
+    # re-resolved against whatever the CURRENT process's working directory happens to
+    # be every time the photo is read back — which silently breaks for every
+    # previously-enrolled person's photo the moment the backend is next started from a
+    # different cwd (e.g. `cd backend && uvicorn ...` vs. a tool that launches uvicorn
+    # from the repo root with `--app-dir backend`). Resolving to an absolute path at
+    # write time makes the stored reference stable regardless of the reading process's
+    # cwd; a no-op when FACE_PATH is already absolute, as it always should be in Docker.
+    person_dir = os.path.join(os.path.abspath(settings.face_path), str(user.tenant_id))
     os.makedirs(person_dir, exist_ok=True)
     image_path = os.path.join(person_dir, f"{person.id}.jpg")
     with open(image_path, "wb") as f:

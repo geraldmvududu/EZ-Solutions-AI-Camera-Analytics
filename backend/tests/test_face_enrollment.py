@@ -5,10 +5,14 @@ verifying; they verify the enrollment pipeline (validation, DB writes, duplicate
 rejection, permissions) around it. face_embedding's real blur/brightness/LBP math
 runs unmodified against the synthetic images below."""
 
+import contextlib
+import os
+
 import numpy as np
 import cv2
 import pytest
 
+from app.api.routes import faces as faces_module
 from app.services import face_embedding
 from tests.conftest import auth_headers, login
 
@@ -70,6 +74,50 @@ def test_enroll_rejects_multiple_faces(client, admin_user, two_faces):
     body = resp.json()
     assert body["success"] is False
     assert "Multiple faces" in body["message"]
+
+
+@contextlib.contextmanager
+def _chdir(path):
+    original = os.getcwd()
+    os.chdir(path)
+    try:
+        yield
+    finally:
+        os.chdir(original)
+
+
+def test_enrolled_photo_path_is_stored_as_absolute(client, db_session, admin_user, one_face, monkeypatch, tmp_path):
+    """Real bug found and fixed: settings.face_path defaults to a relative
+    "./data/faces", and storing that as-is means the stored image_reference gets
+    re-resolved against whatever the CURRENT process's cwd happens to be every time
+    it's read — silently breaking every enrolled photo the moment the backend is next
+    started from a different working directory (see app/api/routes/faces.py::
+    enroll_person). Enroll from one cwd, then read back from a different one, and
+    confirm the stored path still resolves."""
+    monkeypatch.setattr(faces_module.settings, "face_path", "./relative_face_dir")
+    token = login(client, admin_user.email)
+    resp = _enroll(client, token)
+    assert resp.json()["success"] is True
+
+    import uuid
+
+    person_id = uuid.UUID(resp.json()["person"]["id"])
+    from app.models.face_profile import FaceProfile
+
+    profile = db_session.query(FaceProfile).filter(FaceProfile.person_id == person_id).one()
+    assert os.path.isabs(profile.image_reference)
+    image_reference = profile.image_reference
+
+    # Simulate the next process start happening from a different working directory —
+    # the stored absolute path must still resolve regardless.
+    with _chdir(tmp_path):
+        assert os.path.exists(image_reference)
+
+    # Clean up the real file/dir this test wrote outside of tmp_path (face_path is a
+    # relative dir resolved against the real cwd at test-run time, not a tmp fixture).
+    import shutil
+
+    shutil.rmtree(os.path.abspath("./relative_face_dir"), ignore_errors=True)
 
 
 def test_enroll_rejects_duplicate(client, admin_user, one_face):
