@@ -11,8 +11,20 @@ numpy==2.1.3
 httpx==0.28.1
 pydantic-settings==2.7.0
 # AI Video Intelligence Phase 2 — real multi-class detection (YOLOv8n). Pulls in
-# torch as a transitive dependency (~311MB locally) — a real, disclosed Docker image
-# size increase, applied on every build regardless of whether any camera opts in
+# torch as a transitive dependency — a real, disclosed Docker image size increase,
+# applied on every build regardless of whether any camera opts in
 # (Camera.multi_class_detection_enabled) since Docker images are static. See
 # CLAUDE.md "Known limitations" and app/detectors/yolo_detector.py.
+#
+# Real bug found and fixed: on Windows, plain `pip install torch` resolves to a
+# CPU-only wheel (~311MB, measured locally) — but on Linux (the actual deployment
+# target, per the Dockerfile), PyPI's default torch wheel bundles full CUDA runtime
+# libraries (nvidia-cudnn/cublas/etc.), several GB uncompressed, even though this
+# platform only ever runs AI_DEVICE=cpu inference and has no GPU. Deploying this to
+# a real VM filled its disk mid-build ("no space left on device") purely from this —
+# not from anything AI Video Intelligence actually needs. Forcing the CPU-only wheel
+# index (same one the official PyTorch install docs recommend for CPU-only setups)
+# fixes this for real on Linux while remaining a no-op on Windows dev machines.
+--extra-index-url https://download.pytorch.org/whl/cpu
+torch==2.5.1
 ultralytics==8.4.150
