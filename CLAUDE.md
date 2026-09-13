@@ -548,7 +548,7 @@ cd ai-engine && python -m app.main
 ## Testing commands
 
 ```bash
-cd backend && pytest -q      # 200 tests: auth, RBAC, tenant isolation, camera CRUD
+cd backend && pytest -q      # 208 tests: auth, RBAC, tenant isolation, camera CRUD
                               # (including the delete cascade covering every dependent
                               # table), credential encryption, rule engine, analytics
                               # aggregates, report export, the Redis-backed rate limiter
@@ -590,9 +590,16 @@ cd backend && pytest -q      # 200 tests: auth, RBAC, tenant isolation, camera C
                               # SUPER_ADMIN-only gate, event review/notes endpoints +
                               # event_category computed per type + category/status
                               # list filters, and the storage-usage aggregate hand-
-                              # verified against real seeded file sizes) — all against
-                              # a real in-memory SQLite DB through the actual FastAPI app
-cd ai-engine && pytest -q    # 88 tests: centroid tracker (including type-aware
+                              # verified against real seeded file sizes), the per-event
+                              # PDF export endpoint (real reportlab PDF bytes + tenant
+                              # isolation), and two more instances of the naive-
+                              # db.delete()-crashes-on-a-real-dependent-row bug class
+                              # found live on the deployed VM (delete_camera not
+                              # cleaning up Notification/incident_alerts/Incident
+                              # references, delete_rule having no dependent-row
+                              # handling at all) — all against a real in-memory
+                              # SQLite DB through the actual FastAPI app
+cd ai-engine && pytest -q    # 91 tests: centroid tracker (including type-aware
                               # matching so a multi-class detector can't let a track
                               # of one object_type steal another's), zone/tripwire
                               # geometry, loitering timer, motion detection (real MOG2 background
@@ -623,7 +630,12 @@ cd ai-engine && pytest -q    # 88 tests: centroid tracker (including type-aware
                               # Event-First Cloud Storage object_storage client (key
                               # layout, internal-vs-public presigned endpoint split,
                               # upload/delete/presign/ensure-bucket-exists — boto3.client
-                              # itself mocked at the network boundary)
+                              # itself mocked at the network boundary), and the real
+                              # OBJECT_EVENT_COOLDOWN_SECONDS bug fix (a second "new"
+                              # track within the cooldown window must not spam a
+                              # second event, one after the cooldown expires must
+                              # still be reported, and the very first detection a
+                              # camera ever makes must never be swallowed)
 cd worker && pytest -q       # 16 tests: retention cleanup for recordings/snapshots/
                               # face-recognition-events/face-profiles against a real
                               # SQLite DB with a hand-crafted minimal schema (the
@@ -892,6 +904,17 @@ narrowly-scoped IAM key in production — never reuse a broader-privileged crede
    before it's actually purged. Same characteristic the pre-existing
    `cleanup_recordings`/`cleanup_snapshots`/`cleanup_face_recognition_events` jobs
    already have; not a new gap introduced by this phase.
+23. **`OBJECT_EVENT_COOLDOWN_SECONDS` (ai-engine/app/worker.py, 30s) is a per-camera
+   throttle, not per-object or per-person**: found live on a deployed VM as a real bug
+   (CentroidTracker briefly losing/re-acquiring the same object was creating a new
+   PERSON_DETECTED event — with its own snapshot and recording trigger — every time,
+   producing ~30k snapshots and 57 recordings for one camera in under a day). The fix
+   trades a small amount of real coverage for that: if two genuinely different people
+   enter the same camera's frame within 30 seconds of each other, only the first gets
+   its own event+snapshot; the second is silently absorbed by the cooldown. Zone/
+   tripwire/violation events (LOITERING_DETECTED, TRIPWIRE_VIOLATION, etc.) are
+   unaffected — each already has its own real per-track/per-zone debounce logic and
+   does not share this cooldown.
 
 ## Current implementation status
 
@@ -1172,3 +1195,88 @@ narrowly-scoped IAM key in production — never reuse a broader-privileged crede
   (not the old one) — with the API response showing the previous `FaceProfile` marked
   `SUSPENDED` and a new one `ACTIVE`, matching the audit-preserving design.
   `cd backend && pytest -q` (148) and `cd frontend && npm run build` both green.
+- **Event-First Cloud Storage Phase 1, real MinIO + real deployed-VM verification (not
+  mocked).** Deploying this phase surfaced and fixed five genuine, previously-unseen
+  bugs — all found via live logs/DB inspection on the deployed VM, not anticipated in
+  advance:
+  1. **MinIO's Docker Hub images no longer exist** (`minio/minio`, `minio/mc` both
+     return "pull access denied", not a deprecation notice) — MinIO now publishes to
+     Quay; fixed by switching `docker-compose.yml` to `quay.io/minio/minio` and
+     `quay.io/minio/mc`.
+  2. **The Phase 1 migration's `event_category` backfill failed on real Postgres**
+     twice, in two different spots: `sa.table('events', sa.column('event_type',
+     sa.String()), ...)` bound the WHERE-clause comparison value as `character
+     varying` against the real `eventtype` Postgres ENUM column
+     ("operator does not exist"), and the same String()-vs-Enum mismatch on the
+     `.values(event_category=...)` SET side ("column ... is of type eventcategory
+     but expression is of type character varying"). SQLite has no true enum type, so
+     this session's own earlier SQLite-based migration test never caught either —
+     the same category of gap this project has hit before (circular FK, camera
+     delete cascade). Fixed by declaring both columns with their real
+     `sa.Enum(..., create_type=False)` types in the `sa.table()` construct. Verified
+     for real: the migration failed with a full Postgres transaction rollback (no
+     partial state — confirmed via `SELECT version_num FROM alembic_version` after
+     each failed attempt) both times, then applied cleanly on the third attempt, with
+     `event_category` correctly backfilled per event_type (spot-checked against real
+     rows) and all four retention tiers seeded with their real day-counts.
+  3. **A real snapshot → MinIO → presigned-URL round trip, with actual bytes.**
+     `docker compose exec minio mc ls --recursive` showed real JPEG objects landing
+     at the exact `tenant-{id}/site-{id}/camera-{id}/snapshots/{filename}` key layout;
+     hitting the real, authenticated `GET /api/snapshots/{id}/image` endpoint with
+     `curl` returned a `307` to `http://<vm-ip>:9000/...` (the **public**, not internal
+     `minio:9000`, endpoint — confirming the internal-vs-public client split actually
+     works against a real deployment, not just in code review); following that
+     redirect downloaded a real 162KB file that `file` confirmed as genuine JPEG data.
+  4. **The same round trip for recordings**, with one added wrinkle: two `AI_EVENT`
+     recordings stayed open far longer than expected because this session's own
+     `POST_TRIGGER_RECORD_SECONDS` widening (10s → 30s, itself a fix from this same
+     deployment — see below) combined with the demo cameras' near-continuous
+     synthetic activity meant they simply never hit a detection gap long enough to
+     close. Confirmed this wasn't a bug by forcing a clean shutdown
+     (`docker compose stop -t 30 ai-engine`), watching real "worker stopped" log
+     lines for both cameras, and then finding both recordings finalized with a real
+     `storage_key`, a real object in MinIO's `recordings/` prefix, and a real `307`
+     to a working presigned URL from `GET /api/recordings/{id}/play` — the exact
+     same verification rigor as the snapshot path.
+  5. **Two more instances of the "naive `db.delete()` crashes on a real dependent
+     row" bug class** (previously fixed once for cameras, see the circular-FK/camera-
+     delete-cascade entries above), found live by exercising this phase's own new/
+     touched code paths against real accumulated VM data:
+     `cameras.py::delete_camera` didn't null `Notification.alert_id` or clean up
+     `incident_alerts` rows before deleting `Alert`s (a real
+     `notifications_alert_id_fkey` violation, confirmed via the actual traceback in
+     `docker compose logs backend`), and didn't unscope `Incident.camera_id`/
+     `source_event_id` either; `rules.py::delete_rule` had *no* dependent-row handling
+     at all and crashed the instant a rule had ever matched a real event
+     (`alerts_rule_id_fkey` violation) — found by exercising the Rules page's
+     just-added Edit feature end-to-end against the live VM. Both fixed the same way
+     as the original camera-delete fix: null the nullable FK / remove the join row,
+     never delete the surviving record's own history as a side effect. Confirmed
+     against the real VM Postgres, not just the SQLite test suite: the exact same
+     rule ID that returned `500` before the fix returned `204` after it, with the
+     surviving `Alert.rule_id` correctly `NULL`.
+  6. Also found and fixed in this same pass, independent of the cloud-storage work:
+     ai-engine created a brand-new `PERSON_DETECTED`/`VEHICLE_DETECTED` event (with
+     its own snapshot and recording trigger) every time `CentroidTracker` merely
+     re-acquired the same object under a new `track_id` — real, measured impact on
+     the VM: one camera produced **~30,600 snapshot rows and 5.9GB of recording
+     files in under 24 hours**, most of it near-duplicate content of an
+     essentially-continuous scene. Fixed with a 30s per-camera cooldown
+     (`OBJECT_EVENT_COOLDOWN_SECONDS`, matching the existing `MOTION_DETECTED`
+     throttle's own convention) and by widening `POST_TRIGGER_RECORD_SECONDS`
+     10s → 30s so a brief detection gap merges into one recording instead of
+     fragmenting into several. Recovering the already-accumulated disk usage this
+     caused (11GB across recordings+snapshots) surfaced one more real, independent
+     bug: **none of `alerts`/`detections`/`events`/`face_recognition_events`
+     `.snapshot_id`/`.recording_id` FK columns were indexed**, so Postgres had to
+     sequentially scan every one of those tables for every one of the ~30,600 rows
+     being deleted — a bulk cleanup that should take seconds took over 20 minutes,
+     confirmed via `pg_stat_activity` showing an active (not blocked, not
+     deadlocked) query with no `wait_event` for that entire duration. Fixed with a
+     dedicated migration adding the seven missing indexes; verified by adding four
+     of them live via `CREATE INDEX CONCURRENTLY` mid-incident (safe — doesn't lock
+     out the in-flight DELETE) and watching the same class of query's real
+     wall-clock time drop accordingly.
+  `cd backend && pytest -q` (208), `cd ai-engine && pytest -q` (91),
+  `cd worker && pytest -q` (16), and `cd frontend && npm run build` all green
+  throughout every fix in this pass.

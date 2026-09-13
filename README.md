@@ -338,6 +338,9 @@ Migrations run automatically on backend startup.
 | No live dashboard updates | Check `/ws/live` isn't blocked — nginx's `/ws/` location must support `Upgrade`/`Connection` headers (already configured in `nginx/nginx.conf`) |
 | A recording won't play in the browser (blank player, or a codec error in the browser console) | The ai-engine writes recordings in a codec (`mp4v`) that isn't browser-playable, then re-encodes to H.264 via the system `ffmpeg` binary right after the recording finishes. Check `docker compose logs ai-engine` for `ffmpeg transcode failed`/`ffmpeg transcode skipped` — if either appears, the original (non-browser-playable but still valid, VLC/ffplay-usable) file was kept instead. Confirm `ffmpeg` is actually present in the ai-engine container (`docker compose exec ai-engine ffmpeg -version`) |
 | "Bad Gateway" (502) on login or any API call, right after rebuilding backend/frontend | nginx resolves `backend`/`frontend` to their container IPs once and (as of the fix that added a `resolver` + `proxy_pass` variable to `nginx/nginx.conf`) re-resolves them on each request — but this only takes effect once nginx itself has been rebuilt with that config. If nginx is still running an older image/config, rebuilding backend or frontend gives them new container IPs that nginx doesn't know about yet: `docker compose logs nginx` will show `connect() failed (111: Connection refused)` against a stale IP. Fix: `docker compose up -d --build nginx` (or just `docker compose restart nginx` if its image already has the resolver fix) |
+| Enrolled People shows no photo for anyone, even right after enrolling/editing one | `.env` is missing `FACE_PATH=/data/faces`. Without it the backend falls back to its own default (`./data/faces`, relative to wherever the process's cwd happens to be *inside the container* — not the mounted `./data/faces` host volume), so uploaded photos are written to the container's own ephemeral filesystem layer and vanish the next time that container is rebuilt or recreated, even though the enrollment itself appeared to succeed. Add the line to `.env`, `docker compose up -d --build backend`, and re-enroll anyone whose photo was lost this way (their embedding/match data is unaffected — only the stored photo file is gone, there's no way to recover it) |
+| `docker compose up -d` fails to pull the `minio`/`minio-init` services (`pull access denied for minio/minio` or `minio/mc`) | MinIO stopped publishing images to Docker Hub — they now live on Quay. Already fixed in this repo's `docker-compose.yml` (`quay.io/minio/minio`, `quay.io/minio/mc`); if you're on an older checkout, update those two `image:` lines |
+| A rebuilt/redeployed backend crash-loops with `alembic` errors mentioning an enum type (e.g. `operator does not exist: eventtype = character varying`) right after pulling new code | A genuine bug in a specific migration, not a deployment mistake — already fixed in this repo (see the `7f2a9c4e1b3d` migration's own comments for the root cause: SQLite has no true enum type, so a data-backfill step that "worked" in local SQLite testing failed against real Postgres's actual ENUM columns). `alembic upgrade`'s transactional DDL means a failed migration rolls back completely and leaves the schema untouched — `docker compose logs backend` will show the real traceback; pulling the latest code and rebuilding resolves it |
 
 ## 2. Architecture
 
@@ -414,14 +417,14 @@ python -m app.main
 ## 4. Testing
 
 ```bash
-cd backend && .venv/bin/pytest -q   # 200 tests, including Facial Recognition, the
+cd backend && .venv/bin/pytest -q   # 208 tests, including Facial Recognition, the
                                      # violation-incident correlation, recording linkage,
                                      # AI Video Intelligence (gate-jumping/tailgating/
                                      # restricted-area/theft, risk scoring, evidence clips),
                                      # and Event-First Cloud Storage (Sites, the object-
                                      # storage boundary, retention tiers, event review/
                                      # categorization/filtering, storage-usage aggregates)
-cd ai-engine && .venv/bin/pytest -q # 88 tests, including FaceRecognizer, SegmentRecorder,
+cd ai-engine && .venv/bin/pytest -q # 91 tests, including FaceRecognizer, SegmentRecorder,
                                      # the gate-jump/tailgating heuristics, the real
                                      # multi-class YoloDetector's class mapping, the
                                      # AssetZoneTracker theft-detection heuristic, and the
