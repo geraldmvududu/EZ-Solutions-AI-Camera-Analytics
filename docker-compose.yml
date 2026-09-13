@@ -32,7 +32,11 @@ services:
   # this exact same S3 API in dev as they would to real AWS S3 in production; only
   # S3_ENDPOINT_URL/credentials differ (see app/services/object_storage.py).
   minio:
-    image: minio/minio:latest
+    # Real deployment gotcha found live: minio/minio and minio/mc no longer exist on
+    # Docker Hub (MinIO moved their published images to Quay) — Hub returns "pull
+    # access denied" for both, not a deprecation notice, so this looks like a typo
+    # until you actually check where the image now lives.
+    image: quay.io/minio/minio:latest
     restart: unless-stopped
     environment:
       MINIO_ROOT_USER: ${AWS_ACCESS_KEY_ID:-minioadmin}
@@ -58,7 +62,7 @@ services:
   # backend/ai-engine wait for this to finish successfully before starting, so the
   # bucket always exists before anything tries to upload to it.
   minio-init:
-    image: minio/mc:latest
+    image: quay.io/minio/mc:latest
     depends_on:
       minio:
         condition: service_healthy
