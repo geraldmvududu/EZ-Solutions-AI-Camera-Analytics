@@ -58,7 +58,10 @@ export type EventType =
   | "RECORDING_FAILURE"
   | "AI_DETECTION"
   | "FACE_RECOGNIZED"
-  | "UNKNOWN_FACE_DETECTED";
+  | "UNKNOWN_FACE_DETECTED"
+  | "GATE_JUMPING_DETECTED"
+  | "TAILGATING_DETECTED"
+  | "RESTRICTED_AREA_VIOLATION";
 
 export interface EventItem {
   id: string;
@@ -67,6 +70,11 @@ export interface EventItem {
   event_type: EventType;
   severity: EventSeverity;
   description: string;
+  detection_id: string | null;
+  zone_id: string | null;
+  tripwire_id: string | null;
+  snapshot_id: string | null;
+  recording_id: string | null;
   occurred_at: string;
   event_metadata: Record<string, unknown>;
   is_demo: boolean;
@@ -80,9 +88,12 @@ export interface AlertItem {
   tenant_id: string;
   event_id: string;
   camera_id: string;
+  rule_id: string | null;
   alert_type: string;
   severity: EventSeverity;
   status: AlertStatus;
+  snapshot_id: string | null;
+  recording_id: string | null;
   notes: string;
   assigned_user_id: string | null;
   acknowledged_at: string | null;

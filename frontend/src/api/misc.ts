@@ -22,6 +22,19 @@ export function getRecordingPlayUrl(recordingId: string): string {
   return `${API_URL}/api/recordings/${recordingId}/play?token=${encodeURIComponent(token)}`;
 }
 
+// GET /snapshots/{id}/image needs a normal Authorization header (no query-token
+// variant exists for it), so — same reasoning as faces.ts::fetchPersonPhoto — fetch it
+// as a blob and hand back an object URL an <img> tag can use.
+export async function fetchSnapshotImage(id: string): Promise<string | null> {
+  const token = tokenStore.getAccess();
+  const resp = await fetch(`${API_URL}/api/snapshots/${id}/image`, {
+    headers: token ? { Authorization: `Bearer ${token}` } : {},
+  });
+  if (!resp.ok) return null;
+  const blob = await resp.blob();
+  return URL.createObjectURL(blob);
+}
+
 export interface AIRule {
   id: string;
   name: string;
