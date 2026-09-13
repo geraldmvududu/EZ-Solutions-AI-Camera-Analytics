@@ -169,20 +169,25 @@ def upgrade() -> None:
         "RECORDING_FAILURE": "OPERATIONS", "AI_DETECTION": "OPERATIONS",
     }
     # Real bug found deploying this migration to real Postgres (SQLite testing didn't
-    # catch it — SQLite has no true enum type, so a plain-VARCHAR column comparison
-    # "worked" there): events.event_type is a genuine Postgres ENUM (`eventtype`), and
-    # declaring it as sa.String() here binds the comparison value as character varying,
-    # which Postgres refuses to compare against an enum column with no cast
-    # ("operator does not exist: eventtype = character varying"). create_type=False
-    # since the type already exists — this is a column-type descriptor for correct
-    # parameter binding, not a request to (re)create the Postgres enum.
+    # catch it — SQLite has no true enum type, so plain-VARCHAR columns "worked"
+    # there): both events.event_type and events.event_category are genuine Postgres
+    # ENUMs, and declaring either as sa.String() here binds values as character
+    # varying — Postgres refuses that both in a WHERE comparison against an enum
+    # column ("operator does not exist: eventtype = character varying") and in an
+    # UPDATE ... SET against one ("column ... is of type eventcategory but expression
+    # is of type character varying"). create_type=False for both since the types
+    # already exist — these are column-type descriptors for correct parameter
+    # binding, not a request to (re)create either Postgres enum.
     existing_event_type = sa.Enum(
         'PERSON_DETECTED', 'VEHICLE_DETECTED', 'MOTION_DETECTED', 'TRIPWIRE_VIOLATION', 'INTRUSION_DETECTED',
         'LOITERING_DETECTED', 'CAMERA_OFFLINE', 'CAMERA_ONLINE', 'RECORDING_FAILURE', 'AI_DETECTION',
         'FACE_RECOGNIZED', 'UNKNOWN_FACE_DETECTED', 'GATE_JUMPING_DETECTED', 'TAILGATING_DETECTED',
         'RESTRICTED_AREA_VIOLATION', 'POTENTIAL_THEFT_DETECTED', name='eventtype', create_type=False,
     )
-    events_table = sa.table('events', sa.column('event_type', existing_event_type), sa.column('event_category', sa.String()))
+    existing_event_category = sa.Enum(
+        'SECURITY', 'PEOPLE', 'VEHICLES', 'SAFETY', 'OPERATIONS', name='eventcategory', create_type=False,
+    )
+    events_table = sa.table('events', sa.column('event_type', existing_event_type), sa.column('event_category', existing_event_category))
     for event_type, category in category_by_type.items():
         connection.execute(events_table.update().where(events_table.c.event_type == event_type).values(event_category=category))
 
