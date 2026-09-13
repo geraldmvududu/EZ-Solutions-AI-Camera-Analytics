@@ -39,6 +39,15 @@ class Settings(BaseSettings):
     face_event_cooldown: int = 30
     face_min_quality: float = 0.70
 
+    # Event-First Cloud Storage Phase 1 (sections 9/29) — same env vars as the
+    # backend's identical settings, read from the same shared env_file, so both
+    # services talk to the same MinIO/S3 bucket. See app/core/object_storage.py.
+    s3_endpoint_url: str | None = None
+    aws_access_key_id: str = "minioadmin"
+    aws_secret_access_key: str = "minioadmin"
+    aws_region: str = "us-east-1"
+    aws_s3_bucket: str = "ez-camera-evidence"
+
 
 @lru_cache
 def get_settings() -> Settings:

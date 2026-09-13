@@ -16,6 +16,16 @@ class Permissions:
     # per spec section 17, distinct from general AI/camera configuration.
     MANAGE_BIOMETRICS = "manage_biometrics"
     VIEW_BIOMETRIC_EVENTS = "view_biometric_events"
+    # Event-First Cloud Storage Phase 1 (section 1) — Sites are a new organizational
+    # layer (Customer -> Site -> Camera); viewing/managing them is deliberately its
+    # own permission pair rather than folded into MANAGE_CAMERAS, since a Security
+    # Manager (see ROLE_PERMISSION_MAP below) can review sites/events but shouldn't
+    # necessarily be able to restructure a tenant's site layout.
+    VIEW_SITES = "view_sites"
+    MANAGE_SITES = "manage_sites"
+    # Retention-tier policy (section 10) is deliberately Platform-Administrator-only
+    # (SUPER_ADMIN) — not exposed here as a per-tenant permission at all; see
+    # app/api/routes/retention_tiers.py, which gates directly on the SUPER_ADMIN role.
 
     @classmethod
     def all(cls) -> list[str]:
@@ -34,6 +44,8 @@ class Permissions:
             cls.MANAGE_SYSTEM_SETTINGS,
             cls.MANAGE_BIOMETRICS,
             cls.VIEW_BIOMETRIC_EVENTS,
+            cls.VIEW_SITES,
+            cls.MANAGE_SITES,
         ]
 
 
@@ -42,6 +54,7 @@ VIEWER_PERMISSIONS = [
     Permissions.VIEW_LIVE_VIDEO,
     Permissions.VIEW_RECORDINGS,
     Permissions.VIEW_REPORTS,
+    Permissions.VIEW_SITES,
 ]
 
 OPERATOR_PERMISSIONS = VIEWER_PERMISSIONS + [
@@ -53,7 +66,14 @@ OPERATOR_PERMISSIONS = VIEWER_PERMISSIONS + [
     Permissions.VIEW_BIOMETRIC_EVENTS,
 ]
 
-ADMIN_PERMISSIONS = OPERATOR_PERMISSIONS + [
+# Event-First Cloud Storage Phase 1 (section 22) — spec's "Security Manager": can
+# investigate events/evidence and view reports (same as Operator) plus manage sites,
+# but — unlike Admin — cannot manage cameras/users/AI configuration/retention policy.
+SECURITY_MANAGER_PERMISSIONS = OPERATOR_PERMISSIONS + [
+    Permissions.MANAGE_SITES,
+]
+
+ADMIN_PERMISSIONS = SECURITY_MANAGER_PERMISSIONS + [
     Permissions.MANAGE_CAMERAS,
     Permissions.MANAGE_AI,
     Permissions.MANAGE_RULES,
@@ -67,6 +87,7 @@ SUPER_ADMIN_PERMISSIONS = Permissions.all()
 ROLE_PERMISSION_MAP = {
     "SUPER_ADMIN": SUPER_ADMIN_PERMISSIONS,
     "ADMIN": ADMIN_PERMISSIONS,
+    "SECURITY_MANAGER": SECURITY_MANAGER_PERMISSIONS,
     "OPERATOR": OPERATOR_PERMISSIONS,
     "VIEWER": VIEWER_PERMISSIONS,
 }

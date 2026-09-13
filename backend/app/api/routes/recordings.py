@@ -3,7 +3,7 @@ import uuid
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, RedirectResponse, Response
 from jose import JWTError
 from sqlalchemy.orm import Session
 
@@ -15,6 +15,7 @@ from app.database import get_db
 from app.models.recording import Recording
 from app.models.user import User
 from app.schemas.recording import RecordingCreate, RecordingFinalize, RecordingProtect, RecordingResponse
+from app.services import object_storage
 
 router = APIRouter(prefix="/recordings", tags=["recordings"])
 
@@ -68,21 +69,23 @@ def download_recording(
     request: Request,
     db: Session = Depends(get_db),
     user: User = Depends(require_permission(Permissions.DOWNLOAD_RECORDINGS)),
-) -> FileResponse:
+) -> Response:
     recording = _get_owned_recording(db, recording_id, user)
-    if not os.path.isfile(recording.file_path):
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Recording file missing from storage")
 
     log_action(
         db, action="RECORDING_DOWNLOADED", tenant_id=user.tenant_id, user_id=user.id,
         resource_type="recording", resource_id=str(recording.id),
         ip_address=request.client.host if request.client else "",
     )
+    if recording.storage_key:
+        return RedirectResponse(object_storage.generate_presigned_url(recording.storage_key))
+    if not os.path.isfile(recording.file_path):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Recording file missing from storage")
     return FileResponse(recording.file_path, media_type="video/mp4", filename=os.path.basename(recording.file_path))
 
 
 @router.get("/{recording_id}/play")
-def play_recording(recording_id: uuid.UUID, token: str, db: Session = Depends(get_db)) -> FileResponse:
+def play_recording(recording_id: uuid.UUID, token: str, db: Session = Depends(get_db)) -> Response:
     """Inline, seekable playback for a <video> tag — mirrors cameras.py::stream_camera's
     query-param-token pattern, since a <video src="..."> can't send an Authorization
     header. Deliberately a separate route from /download: that one sets
@@ -103,6 +106,9 @@ def play_recording(recording_id: uuid.UUID, token: str, db: Session = Depends(ge
     recording = db.get(Recording, recording_id)
     if recording is None or (tenant_id and recording.tenant_id != tenant_id):
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Recording not found")
+
+    if recording.storage_key:
+        return RedirectResponse(object_storage.generate_presigned_url(recording.storage_key))
     if not os.path.isfile(recording.file_path):
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Recording file missing from storage")
 
@@ -179,6 +185,7 @@ def finalize_recording(recording_id: uuid.UUID, payload: RecordingFinalize, db: 
     recording.ended_at = payload.ended_at
     recording.duration_seconds = payload.duration_seconds
     recording.file_size_bytes = payload.file_size_bytes
+    recording.storage_key = payload.storage_key
     db.commit()
     db.refresh(recording)
     return recording

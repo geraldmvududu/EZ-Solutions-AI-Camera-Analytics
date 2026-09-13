@@ -52,6 +52,12 @@ class Incident(Base, UUIDPKMixin, TimestampMixin, TenantScopedMixin):
     # reporting only; never used to auto-retrain any model (section 26).
     review_decision: Mapped[str] = mapped_column(String(50), nullable=False, default="")
     evidence_clip_path: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    # Event-First Cloud Storage Phase 1 (section 9) — mirrors Snapshot.storage_key:
+    # set once ai-engine uploads the ffmpeg-trimmed clip to MinIO/S3; nullable so an
+    # evidence clip created before this phase (or one whose upload failed) still
+    # serves from evidence_clip_path on local disk exactly as before.
+    evidence_clip_storage_key: Mapped[str | None] = mapped_column(String(1000), nullable=True)
+    evidence_clip_size_bytes: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     # Set by app/services/violation_service.py at auto-creation time, for both incident
     # paths. Evidence-clip lookup (GET /incidents/internal/pending-evidence-clips) goes
     # through this directly rather than through related_alerts — an "always-incident"

@@ -9,7 +9,10 @@ import numpy as np
 
 from app.core import face_embedding, face_recognizer as fr_module
 from app.core.face_recognizer import IDENTITY_FRESHNESS_SECONDS, FaceRecognizer, _within_operating_hours
+from app.core.snapshotter import SavedSnapshot
 from app.detectors.base import Detection
+
+_FAKE_SNAPSHOT = SavedSnapshot(file_path="/tmp/fake.jpg", storage_key="tenant-t1/site-unassigned/camera-c1/snapshots/fake.jpg", file_size_bytes=123)
 
 
 def _person_detection() -> Detection:
@@ -41,7 +44,7 @@ def test_cooldown_prevents_immediate_re_recognition(monkeypatch):
         True, "", 1, face_embedding.DetectedFace(0, 0, 50, 50), 0.9, 0.9, 0.9, 0.9
     ))
     monkeypatch.setattr(face_embedding, "compute_embedding", lambda crop, face: np.zeros(10, dtype=np.float32))
-    monkeypatch.setattr(fr_module, "save_snapshot", lambda camera_id, frame: "/tmp/fake.jpg")
+    monkeypatch.setattr(fr_module, "save_snapshot", lambda camera, frame: _FAKE_SNAPSHOT)
 
     calls = []
     monkeypatch.setattr(fr_module.backend_client, "create_snapshot", lambda payload: {"id": "snap-1"})
@@ -68,7 +71,7 @@ def test_cooldown_uses_camera_dict_value_over_static_setting(monkeypatch):
         True, "", 1, face_embedding.DetectedFace(0, 0, 50, 50), 0.9, 0.9, 0.9, 0.9
     ))
     monkeypatch.setattr(face_embedding, "compute_embedding", lambda crop, face: np.zeros(10, dtype=np.float32))
-    monkeypatch.setattr(fr_module, "save_snapshot", lambda camera_id, frame: "/tmp/fake.jpg")
+    monkeypatch.setattr(fr_module, "save_snapshot", lambda camera, frame: _FAKE_SNAPSHOT)
     monkeypatch.setattr(fr_module.backend_client, "create_snapshot", lambda payload: {"id": "snap-1"})
 
     calls = []
@@ -126,7 +129,7 @@ def _mock_quality_and_embedding(monkeypatch):
         True, "", 1, face_embedding.DetectedFace(0, 0, 50, 50), 0.9, 0.9, 0.9, 0.9
     ))
     monkeypatch.setattr(face_embedding, "compute_embedding", lambda crop, face: np.zeros(10, dtype=np.float32))
-    monkeypatch.setattr(fr_module, "save_snapshot", lambda camera_id, frame: "/tmp/fake.jpg")
+    monkeypatch.setattr(fr_module, "save_snapshot", lambda camera, frame: _FAKE_SNAPSHOT)
     monkeypatch.setattr(fr_module.backend_client, "create_snapshot", lambda payload: {"id": "snap-1"})
 
 
@@ -226,7 +229,7 @@ def _mock_recognition_pipeline(monkeypatch, recognize_result: dict):
         True, "", 1, face_embedding.DetectedFace(0, 0, 50, 50), 0.9, 0.9, 0.9, 0.9
     ))
     monkeypatch.setattr(face_embedding, "compute_embedding", lambda crop, face: np.zeros(10, dtype=np.float32))
-    monkeypatch.setattr(fr_module, "save_snapshot", lambda camera_id, frame: "/tmp/fake.jpg")
+    monkeypatch.setattr(fr_module, "save_snapshot", lambda camera, frame: _FAKE_SNAPSHOT)
     monkeypatch.setattr(fr_module.backend_client, "create_snapshot", lambda payload: {"id": "snap-1"})
     monkeypatch.setattr(fr_module.backend_client, "recognize_face", lambda payload: recognize_result)
 

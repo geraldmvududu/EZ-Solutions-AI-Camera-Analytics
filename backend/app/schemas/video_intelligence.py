@@ -53,3 +53,5 @@ class PendingEvidenceClip(BaseModel):
 
 class EvidenceClipUpdate(BaseModel):
     evidence_clip_path: str
+    evidence_clip_storage_key: str | None = None
+    evidence_clip_size_bytes: int = 0

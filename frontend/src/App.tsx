@@ -4,6 +4,7 @@ import { ProtectedRoute } from "./components/ProtectedRoute";
 import { LoginPage } from "./pages/Login";
 import { DashboardPage } from "./pages/Dashboard";
 import { CamerasPage } from "./pages/Cameras";
+import { SitesPage } from "./pages/Sites";
 import { LiveCamerasPage } from "./pages/LiveCameras";
 import { EventsPage } from "./pages/Events";
 import { AlertsPage } from "./pages/Alerts";
@@ -21,6 +22,7 @@ import { EnrolledPeoplePage } from "./pages/faces/EnrolledPeople";
 import { RecognitionEventsPage } from "./pages/faces/RecognitionEvents";
 import { VideoIntelligenceDashboardPage } from "./pages/VideoIntelligenceDashboard";
 import { VideoIntelligenceSettingsPage } from "./pages/VideoIntelligenceSettings";
+import { StorageUsagePage } from "./pages/StorageUsage";
 
 export default function App() {
   return (
@@ -34,6 +36,14 @@ export default function App() {
           element={
             <ProtectedRoute permission="manage_cameras">
               <CamerasPage />
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="/sites"
+          element={
+            <ProtectedRoute permission="view_sites">
+              <SitesPage />
             </ProtectedRoute>
           }
         />
@@ -103,6 +113,14 @@ export default function App() {
           element={
             <ProtectedRoute permission="view_reports">
               <AnalyticsPage />
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="/storage-usage"
+          element={
+            <ProtectedRoute permission="view_reports">
+              <StorageUsagePage />
             </ProtectedRoute>
           }
         />

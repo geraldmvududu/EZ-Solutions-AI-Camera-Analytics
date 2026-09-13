@@ -11,6 +11,9 @@ import type { AlertItem, Camera, EventItem } from "../types";
 import { useAuth } from "../context/AuthContext";
 import { VideoPlayerModal } from "./Recordings";
 
+const ALERT_STATUSES = ["NEW", "ACKNOWLEDGED", "INVESTIGATING", "RESOLVED", "FALSE_POSITIVE"];
+const SEVERITIES = ["INFO", "LOW", "MEDIUM", "HIGH", "CRITICAL"];
+
 function AlertDetailModal({
   alert,
   cameraName,
@@ -106,7 +109,7 @@ function AlertDetailModal({
         <div>
           <label className="block text-xs text-slate-400 mb-1">Status</label>
           <select value={status} onChange={(e) => setStatus(e.target.value as AlertItem["status"])} className="w-full rounded bg-base-800 border border-base-600 px-3 py-1.5 text-sm text-slate-100">
-            {["NEW", "ACKNOWLEDGED", "INVESTIGATING", "RESOLVED", "FALSE_POSITIVE"].map((s) => (
+            {ALERT_STATUSES.map((s) => (
               <option key={s} value={s}>
                 {s}
               </option>
@@ -144,14 +147,27 @@ export function AlertsPage() {
   const [error, setError] = useState<string | null>(null);
   const { hasPermission } = useAuth();
 
+  const [cameraFilter, setCameraFilter] = useState("");
+  const [severityFilter, setSeverityFilter] = useState("");
+  const [statusFilter, setStatusFilter] = useState("");
+
   function load() {
-    listAlerts({ limit: "200" })
+    const params: Record<string, string> = { limit: "200" };
+    if (cameraFilter) params.camera_id = cameraFilter;
+    if (severityFilter) params.severity = severityFilter;
+    if (statusFilter) params.status = statusFilter;
+
+    listAlerts(params)
       .then(setAlerts)
       .catch((err) => setError(err instanceof Error ? err.message : "Failed to load alerts"));
   }
 
   useEffect(() => {
     load();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [cameraFilter, severityFilter, statusFilter]);
+
+  useEffect(() => {
     camerasApi.listCameras().then(setCameras).catch(() => {});
     listRules().then(setRules).catch(() => {});
   }, []);
@@ -176,9 +192,39 @@ export function AlertsPage() {
 
   const canManage = hasPermission("manage_alerts");
 
+  const selectClass = "rounded bg-base-800 border border-base-600 px-2 py-1.5 text-xs text-slate-100";
+
   return (
     <Layout title="Alerts">
       {error && <div className="text-severity-critical text-sm mb-4">{error}</div>}
+
+      <div className="flex flex-wrap items-center gap-2 mb-4">
+        <select value={cameraFilter} onChange={(e) => setCameraFilter(e.target.value)} className={selectClass}>
+          <option value="">All cameras</option>
+          {cameras.map((c) => (
+            <option key={c.id} value={c.id}>
+              {c.name}
+            </option>
+          ))}
+        </select>
+        <select value={severityFilter} onChange={(e) => setSeverityFilter(e.target.value)} className={selectClass}>
+          <option value="">All severities</option>
+          {SEVERITIES.map((s) => (
+            <option key={s} value={s}>
+              {s}
+            </option>
+          ))}
+        </select>
+        <select value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)} className={selectClass}>
+          <option value="">All statuses</option>
+          {ALERT_STATUSES.map((s) => (
+            <option key={s} value={s}>
+              {s}
+            </option>
+          ))}
+        </select>
+      </div>
+
       <div className="rounded-lg border border-base-700 bg-base-900 overflow-hidden">
         <table className="w-full text-sm">
           <thead className="bg-base-800 text-slate-400 text-xs uppercase">
@@ -212,7 +258,7 @@ export function AlertsPage() {
                         onChange={(e) => handleStatusChange(a.id, e.target.value)}
                         className="rounded bg-base-800 border border-base-600 px-2 py-1 text-xs text-slate-100"
                       >
-                        {["NEW", "ACKNOWLEDGED", "INVESTIGATING", "RESOLVED", "FALSE_POSITIVE"].map((s) => (
+                        {ALERT_STATUSES.map((s) => (
                           <option key={s} value={s}>
                             {s}
                           </option>

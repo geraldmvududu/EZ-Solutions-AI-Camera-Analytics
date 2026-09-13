@@ -4,7 +4,7 @@ import * as systemApi from "../api/system";
 import type { UserItem } from "../types";
 import { ApiError } from "../api/client";
 
-const ROLES = ["VIEWER", "OPERATOR", "ADMIN", "SUPER_ADMIN"];
+const ROLES = ["VIEWER", "OPERATOR", "SECURITY_MANAGER", "ADMIN", "SUPER_ADMIN"];
 
 export function UsersPage() {
   const [users, setUsers] = useState<UserItem[]>([]);

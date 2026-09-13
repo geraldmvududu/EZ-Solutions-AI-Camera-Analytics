@@ -3,7 +3,7 @@ from datetime import datetime
 
 from pydantic import BaseModel
 
-from app.models.event import EventSeverity, EventType
+from app.models.event import EventCategory, EventReviewStatus, EventSeverity, EventType
 
 
 class EventCreate(BaseModel):
@@ -40,5 +40,18 @@ class EventResponse(BaseModel):
     event_metadata: dict
     is_demo: bool
     created_at: datetime
+    status: EventReviewStatus
+    reviewed_by_user_id: uuid.UUID | None
+    reviewed_at: datetime | None
+    notes: str
+    event_category: EventCategory
 
     model_config = {"from_attributes": True}
+
+
+class EventReviewUpdate(BaseModel):
+    status: EventReviewStatus
+
+
+class EventNotesUpdate(BaseModel):
+    notes: str

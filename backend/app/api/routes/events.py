@@ -1,5 +1,5 @@
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone
 
 from anyio import to_thread
 from fastapi import APIRouter, Depends, HTTPException, Query, status
@@ -9,11 +9,12 @@ from app.core.deps import require_internal_service, require_permission, tenant_f
 from app.core.permissions import Permissions
 from app.database import get_db
 from app.models.camera import Camera
-from app.models.event import Event, EventSeverity, EventType
+from app.models.event import Event, EventCategory, EventReviewStatus, EventSeverity, EventType
 from app.models.user import User
-from app.schemas.event import EventCreate, EventResponse
+from app.schemas.event import EventCreate, EventNotesUpdate, EventResponse, EventReviewUpdate
 from app.core.audit import log_action
 from app.services import rule_engine
+from app.services.event_classification import classify_event
 from app.services.notification_service import notify_users_of_alert
 from app.services.violation_service import maybe_create_violation_incident
 from app.services.ws_manager import manager
@@ -26,6 +27,8 @@ def list_events(
     camera_id: uuid.UUID | None = None,
     event_type: EventType | None = None,
     severity: EventSeverity | None = None,
+    event_category: EventCategory | None = None,
+    status_filter: EventReviewStatus | None = Query(None, alias="status"),
     start: datetime | None = None,
     end: datetime | None = None,
     limit: int = Query(100, le=500),
@@ -43,6 +46,10 @@ def list_events(
         query = query.filter(Event.event_type == event_type)
     if severity:
         query = query.filter(Event.severity == severity)
+    if event_category:
+        query = query.filter(Event.event_category == event_category)
+    if status_filter:
+        query = query.filter(Event.status == status_filter)
     if start:
         query = query.filter(Event.occurred_at >= start)
     if end:
@@ -63,6 +70,48 @@ def get_event(
     return event
 
 
+def _get_owned_event(db: Session, event_id: uuid.UUID, user: User) -> Event:
+    event = db.get(Event, event_id)
+    tenant_id = tenant_filter_value(user)
+    if event is None or (tenant_id and event.tenant_id != tenant_id):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Event not found")
+    return event
+
+
+@router.post("/{event_id}/review", response_model=EventResponse)
+def review_event(
+    event_id: uuid.UUID,
+    payload: EventReviewUpdate,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_permission(Permissions.MANAGE_ALERTS)),
+) -> Event:
+    """Event-First Cloud Storage Phase 1 (sections 3/13): a plain Event (e.g.
+    PERSON_DETECTED) never automatically becomes an Incident, so this is its own
+    review workflow — separate from Incident.status and Alert.status, which already
+    existed before this phase."""
+    event = _get_owned_event(db, event_id, user)
+    event.status = payload.status
+    event.reviewed_by_user_id = user.id if payload.status == EventReviewStatus.REVIEWED else None
+    event.reviewed_at = datetime.now(timezone.utc) if payload.status == EventReviewStatus.REVIEWED else None
+    db.commit()
+    db.refresh(event)
+    return event
+
+
+@router.post("/{event_id}/notes", response_model=EventResponse)
+def add_event_notes(
+    event_id: uuid.UUID,
+    payload: EventNotesUpdate,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_permission(Permissions.MANAGE_ALERTS)),
+) -> Event:
+    event = _get_owned_event(db, event_id, user)
+    event.notes = payload.notes
+    db.commit()
+    db.refresh(event)
+    return event
+
+
 @router.post("", response_model=EventResponse, status_code=status.HTTP_201_CREATED, dependencies=[Depends(require_internal_service)])
 async def create_event(payload: EventCreate, db: Session = Depends(get_db)) -> Event:
     """Called by the AI engine (or the camera-status watchdog) whenever a real event
@@ -72,7 +121,7 @@ async def create_event(payload: EventCreate, db: Session = Depends(get_db)) -> E
     if camera is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Camera not found")
 
-    event = Event(tenant_id=camera.tenant_id, **payload.model_dump())
+    event = Event(tenant_id=camera.tenant_id, event_category=classify_event(payload.event_type), **payload.model_dump())
     db.add(event)
     db.commit()
     db.refresh(event)

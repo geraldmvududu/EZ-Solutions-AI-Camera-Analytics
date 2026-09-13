@@ -32,6 +32,8 @@ class CameraCreate(BaseModel):
     face_operating_hours_start: str = ""
     face_operating_hours_end: str = ""
     multi_class_detection_enabled: bool = False
+    site_id: uuid.UUID | None = None
+    cloud_recording_enabled: bool = False
 
 
 class CameraUpdate(BaseModel):
@@ -58,6 +60,8 @@ class CameraUpdate(BaseModel):
     face_operating_hours_start: str | None = None
     face_operating_hours_end: str | None = None
     multi_class_detection_enabled: bool | None = None
+    site_id: uuid.UUID | None = None
+    cloud_recording_enabled: bool | None = None
 
 
 class CameraResponse(BaseModel):
@@ -86,6 +90,8 @@ class CameraResponse(BaseModel):
     face_operating_hours_start: str
     face_operating_hours_end: str
     multi_class_detection_enabled: bool
+    site_id: uuid.UUID | None
+    cloud_recording_enabled: bool
     status: CameraStatus
     is_active: bool
     is_demo: bool

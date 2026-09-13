@@ -80,6 +80,18 @@ class Camera(Base, UUIDPKMixin, TimestampMixin, TenantScopedMixin):
     # CPU and pulls in a much larger torch/ultralytics dependency).
     multi_class_detection_enabled: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
 
+    # Event-First Cloud Storage Phase 1 (section 1) — nullable so existing cameras
+    # (predating the Site concept) keep working unmigrated; the migration backfills a
+    # "Default Site" per tenant and points every existing camera at it.
+    site_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("sites.id"), nullable=True, index=True)
+
+    # Event-First Cloud Storage Phase 1 (section 7) — spec's "Full Cloud Recording"
+    # premium tier: off by default (continuous recordings stay local-only, per section
+    # 8's default philosophy), lets an admin opt a specific camera's CONTINUOUS-mode
+    # recordings into the same S3/MinIO upload path already used unconditionally for
+    # snapshots and non-continuous (event/motion) recordings.
+    cloud_recording_enabled: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+
     status: Mapped[CameraStatus] = mapped_column(Enum(CameraStatus), default=CameraStatus.OFFLINE, nullable=False)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     is_demo: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)

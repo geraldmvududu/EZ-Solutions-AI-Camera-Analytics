@@ -27,6 +27,48 @@ services:
     networks: [ez-internal]
     # Not published to the host (section 57).
 
+  # Event-First Cloud Storage Phase 1 (section 29's "object storage development
+  # service") — a self-hosted, S3-API-compatible service. backend/ai-engine talk to
+  # this exact same S3 API in dev as they would to real AWS S3 in production; only
+  # S3_ENDPOINT_URL/credentials differ (see app/services/object_storage.py).
+  minio:
+    image: minio/minio:latest
+    restart: unless-stopped
+    environment:
+      MINIO_ROOT_USER: ${AWS_ACCESS_KEY_ID:-minioadmin}
+      MINIO_ROOT_PASSWORD: ${AWS_SECRET_ACCESS_KEY:-minioadmin}
+    command: server /data --console-address ":9001"
+    volumes:
+      - ./data/minio:/data
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    ports:
+      # Deliberate lab-only exception (same reasoning as the backend's own port 8000
+      # below): presigned URLs are signed for whatever host the end user's browser
+      # can actually reach, which is NOT the internal "minio:9000" Docker hostname —
+      # see S3_PUBLIC_ENDPOINT_URL. Firewall this in anything beyond a lab deployment,
+      # same as port 8000.
+      - "9000:9000"
+    networks: [ez-internal]
+
+  # One-shot: creates the evidence bucket if it doesn't exist yet, then exits.
+  # backend/ai-engine wait for this to finish successfully before starting, so the
+  # bucket always exists before anything tries to upload to it.
+  minio-init:
+    image: minio/mc:latest
+    depends_on:
+      minio:
+        condition: service_healthy
+    entrypoint: >
+      /bin/sh -c "
+      mc alias set local http://minio:9000 ${AWS_ACCESS_KEY_ID:-minioadmin} ${AWS_SECRET_ACCESS_KEY:-minioadmin} &&
+      mc mb --ignore-existing local/${AWS_S3_BUCKET:-ez-camera-evidence}
+      "
+    networks: [ez-internal]
+
   backend:
     build: ./backend
     restart: unless-stopped
@@ -34,6 +76,14 @@ services:
     environment:
       DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-ezsolutions}:${POSTGRES_PASSWORD:-change_me_strong_password}@postgres:5432/${POSTGRES_DB:-ez_camera_analytics}
       REDIS_URL: redis://redis:6379/0
+      S3_ENDPOINT_URL: http://minio:9000
+      # The address a real user's BROWSER can reach — never the internal Docker
+      # hostname above. The http://localhost:9000 default only works when Docker
+      # and the browser are on the same machine (pure local dev); a real deployment
+      # (VM, cloud) MUST set S3_PUBLIC_ENDPOINT_URL in .env to that VM's real
+      # reachable address (e.g. https://your-vm-ip:9000), the same way API_URL/
+      # FRONTEND_URL already need customizing per deployment.
+      S3_PUBLIC_ENDPOINT_URL: ${S3_PUBLIC_ENDPOINT_URL:-http://localhost:9000}
     ports:
       # Dev/lab-only: gives the Expo Go mobile app a plain-HTTP path directly to the
       # backend, since it can't click through nginx's self-signed HTTPS cert the way a
@@ -51,6 +101,8 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
+      minio-init:
+        condition: service_completed_successfully
     networks: [ez-internal]
 
   ai-engine:
@@ -59,6 +111,7 @@ services:
     env_file: .env
     environment:
       API_URL: http://backend:8000
+      S3_ENDPOINT_URL: http://minio:9000
     volumes:
       - ./data/recordings:/data/recordings
       - ./data/snapshots:/data/snapshots
@@ -66,21 +119,28 @@ services:
       - ./data/models:/data/models
       - ./videos:/videos:ro
     depends_on:
-      - backend
+      backend:
+        condition: service_started
+      minio-init:
+        condition: service_completed_successfully
     networks: [ez-internal]
 
   worker:
     build: ./worker
     restart: unless-stopped
+    env_file: .env
     environment:
       DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-ezsolutions}:${POSTGRES_PASSWORD:-change_me_strong_password}@postgres:5432/${POSTGRES_DB:-ez_camera_analytics}
       RETENTION_CHECK_INTERVAL_SECONDS: 3600
+      S3_ENDPOINT_URL: http://minio:9000
     volumes:
       - ./data/recordings:/data/recordings
       - ./data/snapshots:/data/snapshots
     depends_on:
       postgres:
         condition: service_healthy
+      minio-init:
+        condition: service_completed_successfully
     networks: [ez-internal]
 
   frontend:

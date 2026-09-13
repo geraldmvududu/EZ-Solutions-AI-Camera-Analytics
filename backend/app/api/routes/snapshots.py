@@ -2,7 +2,7 @@ import os
 import uuid
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, RedirectResponse, Response
 from sqlalchemy.orm import Session
 
 from app.core.deps import require_internal_service, require_permission, tenant_filter_value
@@ -11,6 +11,7 @@ from app.database import get_db
 from app.models.snapshot import Snapshot
 from app.models.user import User
 from app.schemas.snapshot import SnapshotCreate, SnapshotResponse
+from app.services import object_storage
 
 router = APIRouter(prefix="/snapshots", tags=["snapshots"])
 
@@ -48,8 +49,16 @@ def get_snapshot_image(
     snapshot_id: uuid.UUID,
     db: Session = Depends(get_db),
     user: User = Depends(require_permission(Permissions.VIEW_CAMERAS)),
-) -> FileResponse:
+) -> Response:
+    """Event-First Cloud Storage Phase 1 (sections 4/21): once this platform's own
+    auth/tenant checks above have already passed, a snapshot with a storage_key is
+    served via a short-lived presigned S3/MinIO URL — the browser never sees AWS
+    credentials, and the URL expires in minutes. A snapshot with no storage_key (one
+    created before this phase, or whose upload failed) falls back to serving the
+    local file directly, exactly as this endpoint always worked before."""
     snapshot = _get_owned_snapshot(db, snapshot_id, user)
+    if snapshot.storage_key:
+        return RedirectResponse(object_storage.generate_presigned_url(snapshot.storage_key))
     if not os.path.isfile(snapshot.file_path):
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Snapshot file missing from storage")
     return FileResponse(snapshot.file_path, media_type="image/jpeg")

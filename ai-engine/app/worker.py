@@ -70,7 +70,12 @@ class CameraWorker:
         self._loitering = LoiteringTracker()
         self._tailgating = TailgatingTracker()
         self._asset_zone = AssetZoneTracker()
-        self._recorder = SegmentRecorder(self.camera_id)
+        self._recorder = SegmentRecorder(
+            self.camera_id,
+            tenant_id=camera.get("tenant_id", ""),
+            site_id=camera.get("site_id"),
+            cloud_recording_enabled=camera.get("cloud_recording_enabled", False),
+        )
         self._reported_track_ids: set[int] = set()
         self._last_tracked: dict[int, Detection] = {}
 
@@ -425,11 +430,13 @@ class CameraWorker:
                     )
 
     def _save_and_report_snapshot(self, frame, detection) -> str | None:
-        file_path = save_snapshot(self.camera_id, frame)
+        saved = save_snapshot(self.camera, frame)
         record = backend_client.create_snapshot(
             {
                 "camera_id": self.camera_id,
-                "file_path": file_path,
+                "file_path": saved.file_path,
+                "storage_key": saved.storage_key,
+                "file_size_bytes": saved.file_size_bytes,
                 "taken_at": datetime.now(timezone.utc).isoformat(),
                 "object_type": detection.object_type if detection else "",
                 "confidence": detection.confidence if detection else None,

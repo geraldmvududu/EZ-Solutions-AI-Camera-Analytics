@@ -42,6 +42,25 @@ class EventSeverity(str, enum.Enum):
     CRITICAL = "CRITICAL"
 
 
+class EventReviewStatus(str, enum.Enum):
+    UNREVIEWED = "UNREVIEWED"
+    REVIEWED = "REVIEWED"
+
+
+class EventCategory(str, enum.Enum):
+    """Event-First Cloud Storage Phase 1 (section 14) — a coarse grouping over
+    EventType for dashboard filtering. Computed once at event-creation time from
+    _EVENT_TYPE_CATEGORY (app/services/event_classification.py) and stored as an
+    indexed column so filtering by category is a real indexed query, not a per-row
+    Python computation on every list request."""
+
+    SECURITY = "SECURITY"
+    PEOPLE = "PEOPLE"
+    VEHICLES = "VEHICLES"
+    SAFETY = "SAFETY"
+    OPERATIONS = "OPERATIONS"
+
+
 class Event(Base, UUIDPKMixin, TimestampMixin, TenantScopedMixin):
     __tablename__ = "events"
 
@@ -69,3 +88,17 @@ class Event(Base, UUIDPKMixin, TimestampMixin, TenantScopedMixin):
     occurred_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, index=True)
     event_metadata: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
     is_demo: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+
+    # Event-First Cloud Storage Phase 1 (sections 3/13/14) — a plain Event (e.g.
+    # PERSON_DETECTED) never automatically becomes an Incident (see
+    # violation_service.py's _ALWAYS_INCIDENT_EVENT_TYPES), so before this it had no
+    # review workflow of its own at all — only Incidents/Alerts did.
+    status: Mapped[EventReviewStatus] = mapped_column(
+        Enum(EventReviewStatus), default=EventReviewStatus.UNREVIEWED, nullable=False, index=True
+    )
+    reviewed_by_user_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("users.id"), nullable=True)
+    reviewed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    notes: Mapped[str] = mapped_column(String(2000), nullable=False, default="")
+    event_category: Mapped[EventCategory] = mapped_column(
+        Enum(EventCategory), default=EventCategory.OPERATIONS, nullable=False, index=True
+    )

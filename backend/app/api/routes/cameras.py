@@ -138,6 +138,8 @@ def create_camera(
         face_operating_hours_start=payload.face_operating_hours_start,
         face_operating_hours_end=payload.face_operating_hours_end,
         multi_class_detection_enabled=payload.multi_class_detection_enabled,
+        site_id=payload.site_id,
+        cloud_recording_enabled=payload.cloud_recording_enabled,
     )
     db.add(camera)
     db.commit()

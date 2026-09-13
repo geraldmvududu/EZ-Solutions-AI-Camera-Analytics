@@ -2,12 +2,13 @@ import { useEffect, useState, type FormEvent } from "react";
 import { Layout } from "../components/layout/Layout";
 import { StatusBadge } from "../components/ui/Badge";
 import * as camerasApi from "../api/cameras";
-import type { Camera, CameraSourceType } from "../types";
+import * as sitesApi from "../api/sites";
+import type { Camera, CameraSourceType, Site } from "../types";
 import { ApiError } from "../api/client";
 
 const SOURCE_TYPES: CameraSourceType[] = ["VIDEO_FILE", "SIMULATED", "WEBCAM", "RTSP", "HTTP_MJPEG", "IP_CAMERA"];
 
-function CameraFormModal({ onClose, onCreated }: { onClose: () => void; onCreated: () => void }) {
+function CameraFormModal({ sites, onClose, onCreated }: { sites: Site[]; onClose: () => void; onCreated: () => void }) {
   const [name, setName] = useState("");
   const [location, setLocation] = useState("");
   const [sourceType, setSourceType] = useState<CameraSourceType>("SIMULATED");
@@ -15,6 +16,8 @@ function CameraFormModal({ onClose, onCreated }: { onClose: () => void; onCreate
   const [streamUrl, setStreamUrl] = useState("");
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
+  const [siteId, setSiteId] = useState("");
+  const [cloudRecordingEnabled, setCloudRecordingEnabled] = useState(false);
   const [faceRecognitionEnabled, setFaceRecognitionEnabled] = useState(false);
   const [faceThreshold, setFaceThreshold] = useState("");
   const [faceHoursStart, setFaceHoursStart] = useState("");
@@ -36,6 +39,8 @@ function CameraFormModal({ onClose, onCreated }: { onClose: () => void; onCreate
         stream_url: ["RTSP", "HTTP_MJPEG", "IP_CAMERA"].includes(sourceType) ? streamUrl : undefined,
         username: username || undefined,
         password: password || undefined,
+        site_id: siteId || null,
+        cloud_recording_enabled: cloudRecordingEnabled,
         face_recognition_enabled: faceRecognitionEnabled,
         face_recognition_threshold: faceThreshold ? Number(faceThreshold) : undefined,
         face_operating_hours_start: faceHoursStart || undefined,
@@ -102,6 +107,29 @@ function CameraFormModal({ onClose, onCreated }: { onClose: () => void; onCreate
           </>
         )}
 
+        <div>
+          <label className="block text-xs text-slate-400 mb-1">Site</label>
+          <select value={siteId} onChange={(e) => setSiteId(e.target.value)} className="w-full rounded bg-base-800 border border-base-600 px-3 py-1.5 text-sm text-slate-100">
+            <option value="">Unassigned</option>
+            {sites.map((s) => (
+              <option key={s.id} value={s.id}>
+                {s.name}
+              </option>
+            ))}
+          </select>
+        </div>
+
+        <div className="border-t border-base-700 pt-3">
+          <label className="flex items-center gap-2 text-sm text-slate-300">
+            <input type="checkbox" checked={cloudRecordingEnabled} onChange={(e) => setCloudRecordingEnabled(e.target.checked)} />
+            Cloud Recording (upload continuous footage too)
+          </label>
+          <p className="text-xs text-slate-500 mt-1">
+            Off by default — only AI-event recordings/snapshots/evidence clips upload to cloud storage. Turn this on
+            to also upload this camera's continuous recordings.
+          </p>
+        </div>
+
         <div className="border-t border-base-700 pt-3">
           <label className="flex items-center gap-2 text-sm text-slate-300 mb-2">
             <input type="checkbox" checked={faceRecognitionEnabled} onChange={(e) => setFaceRecognitionEnabled(e.target.checked)} />
@@ -157,6 +185,7 @@ function CameraFormModal({ onClose, onCreated }: { onClose: () => void; onCreate
 
 export function CamerasPage() {
   const [cameras, setCameras] = useState<Camera[]>([]);
+  const [sites, setSites] = useState<Site[]>([]);
   const [showModal, setShowModal] = useState(false);
   const [testResults, setTestResults] = useState<Record<string, string>>({});
   const [error, setError] = useState<string | null>(null);
@@ -171,7 +200,16 @@ export function CamerasPage() {
 
   useEffect(() => {
     load();
+    sitesApi.listSites().then(setSites).catch(() => {
+      /* Sites is a permission-gated feature (view_sites) — a user without it simply
+      sees no site dropdown/column, not an error, since it's non-essential here. */
+    });
   }, []);
+
+  function siteName(siteId: string | null): string {
+    if (!siteId) return "—";
+    return sites.find((s) => s.id === siteId)?.name ?? "—";
+  }
 
   async function handleTest(id: string) {
     setTestResults((prev) => ({ ...prev, [id]: "Testing..." }));
@@ -211,6 +249,7 @@ export function CamerasPage() {
             <tr>
               <th className="text-left px-4 py-2">Code</th>
               <th className="text-left px-4 py-2">Name</th>
+              <th className="text-left px-4 py-2">Site</th>
               <th className="text-left px-4 py-2">Location</th>
               <th className="text-left px-4 py-2">Source</th>
               <th className="text-left px-4 py-2">Status</th>
@@ -226,6 +265,7 @@ export function CamerasPage() {
               <tr key={cam.id}>
                 <td className="px-4 py-2 text-slate-400">{cam.camera_code}</td>
                 <td className="px-4 py-2 text-slate-100">{cam.name}</td>
+                <td className="px-4 py-2 text-slate-400">{siteName(cam.site_id)}</td>
                 <td className="px-4 py-2 text-slate-400">{cam.location || "—"}</td>
                 <td className="px-4 py-2 text-slate-400">{cam.source_type.replace(/_/g, " ")}</td>
                 <td className="px-4 py-2">
@@ -259,7 +299,7 @@ export function CamerasPage() {
         </table>
       </div>
 
-      {showModal && <CameraFormModal onClose={() => setShowModal(false)} onCreated={load} />}
+      {showModal && <CameraFormModal sites={sites} onClose={() => setShowModal(false)} onCreated={load} />}
     </Layout>
   );
 }

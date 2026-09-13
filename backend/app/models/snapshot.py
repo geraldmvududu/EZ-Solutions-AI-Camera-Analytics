@@ -1,7 +1,7 @@
 import uuid
 from datetime import datetime
 
-from sqlalchemy import DateTime, Float, ForeignKey, String
+from sqlalchemy import DateTime, Float, ForeignKey, Integer, String
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.database import Base
@@ -18,6 +18,13 @@ class Snapshot(Base, UUIDPKMixin, TimestampMixin, TenantScopedMixin):
         ForeignKey("events.id", use_alter=True, name="fk_snapshots_event_id"), nullable=True, index=True
     )
     file_path: Mapped[str] = mapped_column(String(1000), nullable=False)
+    # Event-First Cloud Storage Phase 1 (section 9) — the MinIO/S3 object key this
+    # snapshot was uploaded to (ai-engine uploads it, backend never sees the bytes).
+    # Nullable: a snapshot created before this phase, or one whose upload failed, has
+    # no storage_key and GET /snapshots/{id}/image falls back to serving file_path
+    # directly from local disk exactly as before — see app/api/routes/snapshots.py.
+    storage_key: Mapped[str | None] = mapped_column(String(1000), nullable=True)
+    file_size_bytes: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     taken_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, index=True)
     object_type: Mapped[str] = mapped_column(String(50), nullable=False, default="")
     confidence: Mapped[float | None] = mapped_column(Float, nullable=True)

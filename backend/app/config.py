@@ -69,6 +69,27 @@ class Settings(BaseSettings):
     # ai-engine's MJPEG live-view server (backend proxies it — see api/routes/cameras.py)
     ai_engine_stream_url: str = "http://localhost:8090"
 
+    # Event-First Cloud Storage Phase 1 (sections 9/29) — object storage for
+    # snapshots/evidence clips/non-continuous recordings. s3_endpoint_url points at
+    # MinIO locally (S3-API-compatible); leave it unset in real AWS to use the real
+    # regional S3 endpoint via aws_region instead. See app/services/object_storage.py.
+    s3_endpoint_url: str | None = None
+    # Real bug avoided: s3_endpoint_url is Docker's internal "http://minio:9000" —
+    # only reachable from OTHER containers, never from the end user's actual browser.
+    # A presigned URL signed against that host would 404/fail to resolve for every
+    # real viewer. s3_public_endpoint_url is the address a browser can actually reach
+    # (MinIO's port published to the host in docker-compose.yml, same deliberate
+    # lab-only exception already made for the backend's own port 8000) and is used
+    # ONLY when generating presigned URLs — never for the internal upload/delete
+    # calls, which keep using s3_endpoint_url. In real AWS, leave both unset: S3's
+    # public regional endpoint is reachable from everywhere, so there's nothing to
+    # split.
+    s3_public_endpoint_url: str | None = None
+    aws_access_key_id: str = "minioadmin"
+    aws_secret_access_key: str = "minioadmin"
+    aws_region: str = "us-east-1"
+    aws_s3_bucket: str = "ez-camera-evidence"
+
     @property
     def cors_origin_list(self) -> list[str]:
         return [o.strip() for o in self.cors_origins.split(",") if o.strip()]

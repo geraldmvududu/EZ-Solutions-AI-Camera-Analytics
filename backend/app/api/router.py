@@ -14,8 +14,11 @@ from app.api.routes import (
     push_tokens,
     recordings,
     reports,
+    retention_tiers,
     rules,
+    sites,
     snapshots,
+    storage,
     system,
     tripwires,
     users,
@@ -45,4 +48,7 @@ api_router.include_router(reports.router)
 api_router.include_router(push_tokens.router)
 api_router.include_router(notifications.router)
 api_router.include_router(video_intelligence.router)
+api_router.include_router(sites.router)
+api_router.include_router(retention_tiers.router)
+api_router.include_router(storage.router)
 api_router.include_router(ws.router)

@@ -43,6 +43,7 @@ import numpy as np
 
 from app.backend_client import backend_client
 from app.config import get_settings
+from app.core import object_storage
 
 logger = logging.getLogger("ai-engine.recorder")
 
@@ -56,8 +57,18 @@ def _parse_iso(value: str) -> datetime:
 
 
 class SegmentRecorder:
-    def __init__(self, camera_id: str, tenant_dir: str | None = None) -> None:
+    def __init__(
+        self, camera_id: str, tenant_id: str = "", site_id: str | None = None, cloud_recording_enabled: bool = False
+    ) -> None:
         self._camera_id = camera_id
+        # Event-First Cloud Storage Phase 1 (sections 7/9) — tenant_id/site_id build
+        # the S3 key (see object_storage.build_key); cloud_recording_enabled is the
+        # spec's "Full Cloud Recording" per-camera opt-in for CONTINUOUS-mode
+        # recordings (non-CONTINUOUS ones — the already-short AI_EVENT/MOTION
+        # recordings — are uploaded unconditionally, see stop() below).
+        self._tenant_id = tenant_id
+        self._site_id = site_id
+        self._cloud_recording_enabled = cloud_recording_enabled
         self._writer: cv2.VideoWriter | None = None
         self._file_path: str | None = None
         self._started_at: datetime | None = None
@@ -144,6 +155,23 @@ class SegmentRecorder:
         duration = self._frame_count / self._fps if self._fps else 0
         file_size = os.path.getsize(self._file_path) if self._file_path and os.path.exists(self._file_path) else 0
 
+        # Event-First Cloud Storage Phase 1 (sections 6/7/8): a CONTINUOUS recording
+        # stays local-only by default (the spec's core "don't cloud-upload everything"
+        # philosophy) — only non-CONTINUOUS (already-short AI_EVENT/MOTION) recordings
+        # upload unconditionally, since those ARE the "evidence" concept for the
+        # recording itself. cloud_recording_enabled is the opt-in that also uploads a
+        # CONTINUOUS segment (spec's "Full Cloud Recording" premium tier).
+        storage_key = None
+        should_upload = self._trigger_type != "CONTINUOUS" or self._cloud_recording_enabled
+        if should_upload and self._file_path and os.path.exists(self._file_path):
+            filename = os.path.basename(self._file_path)
+            storage_key = object_storage.build_key(self._tenant_id, self._site_id, self._camera_id, "recordings", filename)
+            try:
+                object_storage.upload_file(self._file_path, storage_key)
+            except Exception:
+                logger.warning("Camera %s: recording upload to object storage failed, serving from local disk only", self._camera_id)
+                storage_key = None
+
         if self.recording_id:
             backend_client.finalize_recording(
                 self.recording_id,
@@ -151,6 +179,7 @@ class SegmentRecorder:
                     "ended_at": datetime.now(timezone.utc).isoformat(),
                     "duration_seconds": duration,
                     "file_size_bytes": file_size,
+                    "storage_key": storage_key,
                 },
             )
             self._generate_evidence_clips(self.recording_id, self._file_path)
@@ -212,4 +241,25 @@ class SegmentRecorder:
                 os.remove(clip_path)
             return
 
-        backend_client.set_incident_evidence_clip(clip["incident_id"], {"evidence_clip_path": clip_path})
+        # Event-First Cloud Storage Phase 1 (section 5/9): evidence clips always
+        # upload to cloud storage regardless of the underlying recording's own
+        # cloud/local status — they're small (~20s by default) and are the literal
+        # "evidence" concept the spec is built around.
+        clip_size = os.path.getsize(clip_path)
+        clip_storage_key = object_storage.build_key(
+            self._tenant_id, self._site_id, self._camera_id, "video-clips", os.path.basename(clip_path)
+        )
+        try:
+            object_storage.upload_file(clip_path, clip_storage_key)
+        except Exception:
+            logger.warning("Camera %s: evidence clip upload to object storage failed for incident %s, serving from local disk only", self._camera_id, clip["incident_id"])
+            clip_storage_key = None
+
+        backend_client.set_incident_evidence_clip(
+            clip["incident_id"],
+            {
+                "evidence_clip_path": clip_path,
+                "evidence_clip_storage_key": clip_storage_key,
+                "evidence_clip_size_bytes": clip_size,
+            },
+        )

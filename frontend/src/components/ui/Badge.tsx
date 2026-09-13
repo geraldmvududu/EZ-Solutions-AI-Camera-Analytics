@@ -24,6 +24,8 @@ const STATUS_CLASSES: Record<string, string> = {
   INVESTIGATING: "bg-severity-high/15 text-severity-high",
   RESOLVED: "bg-accent-500/15 text-accent-500",
   FALSE_POSITIVE: "bg-base-600 text-slate-400",
+  UNREVIEWED: "bg-severity-info/15 text-severity-info",
+  REVIEWED: "bg-accent-500/15 text-accent-500",
 };
 
 export function StatusBadge({ status }: { status: string }) {

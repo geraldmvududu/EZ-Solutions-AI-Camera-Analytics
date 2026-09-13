@@ -157,11 +157,13 @@ class FaceRecognizer:
 
         snapshot_id = None
         try:
-            file_path = save_snapshot(self.camera_id, frame)
+            saved = save_snapshot(camera, frame)
             record = backend_client.create_snapshot(
                 {
                     "camera_id": self.camera_id,
-                    "file_path": file_path,
+                    "file_path": saved.file_path,
+                    "storage_key": saved.storage_key,
+                    "file_size_bytes": saved.file_size_bytes,
                     "taken_at": datetime.now(timezone.utc).isoformat(),
                     "object_type": "PERSON",
                     "confidence": detection.confidence,

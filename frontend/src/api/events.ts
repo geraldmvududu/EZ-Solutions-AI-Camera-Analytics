@@ -1,5 +1,5 @@
 import { apiRequest } from "./client";
-import type { AlertItem, EventItem } from "../types";
+import type { AlertItem, EventItem, EventReviewStatus } from "../types";
 
 export const listEvents = (params: Record<string, string> = {}) => {
   const qs = new URLSearchParams(params).toString();
@@ -7,6 +7,12 @@ export const listEvents = (params: Record<string, string> = {}) => {
 };
 
 export const getEvent = (id: string) => apiRequest<EventItem>(`/api/events/${id}`);
+
+export const reviewEvent = (id: string, status: EventReviewStatus) =>
+  apiRequest<EventItem>(`/api/events/${id}/review`, { method: "POST", body: { status } });
+
+export const addEventNotes = (id: string, notes: string) =>
+  apiRequest<EventItem>(`/api/events/${id}/notes`, { method: "POST", body: { notes } });
 
 export const listAlerts = (params: Record<string, string> = {}) => {
   const qs = new URLSearchParams(params).toString();

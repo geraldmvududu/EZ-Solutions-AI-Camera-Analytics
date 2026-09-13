@@ -1,4 +1,4 @@
-export type Role = "SUPER_ADMIN" | "ADMIN" | "OPERATOR" | "VIEWER";
+export type Role = "SUPER_ADMIN" | "ADMIN" | "SECURITY_MANAGER" | "OPERATOR" | "VIEWER";
 
 export interface CurrentUser {
   id: string;
@@ -39,11 +39,43 @@ export interface Camera {
   face_operating_hours_start: string;
   face_operating_hours_end: string;
   multi_class_detection_enabled: boolean;
+  site_id: string | null;
+  cloud_recording_enabled: boolean;
   status: CameraStatus;
   is_active: boolean;
   is_demo: boolean;
   last_heartbeat_at: string | null;
   created_at: string;
+}
+
+// ---- Event-First Cloud Storage Phase 1 ----
+
+export interface Site {
+  id: string;
+  tenant_id: string;
+  name: string;
+  address: string;
+  timezone: string;
+  is_active: boolean;
+  created_at: string;
+}
+
+export interface RetentionTier {
+  id: string;
+  name: string;
+  event_metadata_days: number;
+  snapshot_days: number;
+  video_evidence_days: number;
+}
+
+export interface StorageUsage {
+  event_metadata_bytes: number;
+  snapshot_bytes: number;
+  evidence_clip_bytes: number;
+  cloud_recording_bytes: number;
+  continuous_recording_bytes: number;
+  total_bytes: number;
+  is_estimate: boolean;
 }
 
 export type EventSeverity = "INFO" | "LOW" | "MEDIUM" | "HIGH" | "CRITICAL";
@@ -65,6 +97,9 @@ export type EventType =
   | "RESTRICTED_AREA_VIOLATION"
   | "POTENTIAL_THEFT_DETECTED";
 
+export type EventReviewStatus = "UNREVIEWED" | "REVIEWED";
+export type EventCategory = "SECURITY" | "PEOPLE" | "VEHICLES" | "SAFETY" | "OPERATIONS";
+
 export interface EventItem {
   id: string;
   tenant_id: string;
@@ -81,6 +116,11 @@ export interface EventItem {
   event_metadata: Record<string, unknown>;
   is_demo: boolean;
   created_at: string;
+  status: EventReviewStatus;
+  reviewed_by_user_id: string | null;
+  reviewed_at: string | null;
+  notes: string;
+  event_category: EventCategory;
 }
 
 export type AlertStatus = "NEW" | "ACKNOWLEDGED" | "INVESTIGATING" | "RESOLVED" | "FALSE_POSITIVE";

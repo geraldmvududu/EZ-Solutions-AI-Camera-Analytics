@@ -30,6 +30,9 @@ class RecordingFinalize(BaseModel):
     ended_at: datetime
     duration_seconds: float
     file_size_bytes: int
+    # Event-First Cloud Storage Phase 1 (section 9) — None when this recording is a
+    # local-only CONTINUOUS segment (see recorder.py::stop's upload decision).
+    storage_key: str | None = None
 
 
 class RecordingProtect(BaseModel):
@@ -42,6 +45,7 @@ class RecordingResponse(BaseModel):
     tenant_id: uuid.UUID
     camera_id: uuid.UUID
     file_path: str
+    storage_key: str | None
     started_at: datetime
     ended_at: datetime | None
     duration_seconds: float

@@ -8,6 +8,8 @@ class SnapshotCreate(BaseModel):
     camera_id: uuid.UUID
     event_id: uuid.UUID | None = None
     file_path: str
+    storage_key: str | None = None
+    file_size_bytes: int = 0
     taken_at: datetime
     object_type: str = ""
     confidence: float | None = None
@@ -19,6 +21,8 @@ class SnapshotResponse(BaseModel):
     camera_id: uuid.UUID
     event_id: uuid.UUID | None
     file_path: str
+    storage_key: str | None
+    file_size_bytes: int
     taken_at: datetime
     object_type: str
     confidence: float | None

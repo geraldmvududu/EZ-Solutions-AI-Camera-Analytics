@@ -2,6 +2,8 @@ httpx==0.28.1
 psycopg[binary]==3.2.3
 sqlalchemy==2.0.36
 pydantic-settings==2.7.0
+# Event-First Cloud Storage Phase 1 — deletes expired cloud-stored evidence from S3/MinIO.
+boto3==1.35.90
 
 # testing
 pytest==8.3.4

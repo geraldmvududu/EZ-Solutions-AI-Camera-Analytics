@@ -21,6 +21,13 @@ class Recording(Base, UUIDPKMixin, TimestampMixin, TenantScopedMixin):
 
     camera_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("cameras.id"), nullable=False, index=True)
     file_path: Mapped[str] = mapped_column(String(1000), nullable=False)
+    # Event-First Cloud Storage Phase 1 (section 9) — set only for non-CONTINUOUS
+    # (i.e. already-short AI_EVENT/MOTION) recordings by default, or for ANY
+    # recording on a camera with cloud_recording_enabled=True (the spec's "Full
+    # Cloud Recording" opt-in). A plain CONTINUOUS recording on a camera without that
+    # flag keeps storage_key NULL and stays local-only, matching the spec's default
+    # "don't cloud-upload all continuous footage" philosophy.
+    storage_key: Mapped[str | None] = mapped_column(String(1000), nullable=True)
     started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, index=True)
     ended_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     duration_seconds: Mapped[float] = mapped_column(Integer, default=0, nullable=False)

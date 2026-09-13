@@ -11,8 +11,10 @@ from app.models.notification import Notification
 from app.models.person import Person
 from app.models.push_token import PushToken
 from app.models.recording import Recording
+from app.models.retention_tier import RetentionTier
 from app.models.rule import AIRule
 from app.models.session import UserSession
+from app.models.site import Site
 from app.models.snapshot import Snapshot
 from app.models.system_health import SystemHealthCheck
 from app.models.tenant import Tenant
@@ -36,8 +38,10 @@ __all__ = [
     "Person",
     "PushToken",
     "Recording",
+    "RetentionTier",
     "AIRule",
     "UserSession",
+    "Site",
     "Snapshot",
     "SystemHealthCheck",
     "Tenant",

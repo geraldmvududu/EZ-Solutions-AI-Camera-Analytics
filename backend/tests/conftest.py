@@ -24,6 +24,7 @@ from app.database import Base, get_db
 from app.main import app
 from app.models.tenant import Tenant
 from app.models.user import Permission, Role, User
+from app.services import object_storage
 
 engine = create_engine("sqlite://", connect_args={"check_same_thread": False}, poolclass=StaticPool)
 TestingSessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
@@ -53,6 +54,18 @@ def _fresh_database():
     rate_limit._redis_down_until = 0.0
     yield
     Base.metadata.drop_all(bind=engine)
+
+
+@pytest.fixture(autouse=True)
+def _mock_object_storage(monkeypatch):
+    """Event-First Cloud Storage Phase 1: without this, any test that exercises a
+    storage_key-set row's presigned-redirect path would make a real network call to
+    AWS's default S3 endpoint (no S3_ENDPOINT_URL in the test environment) — slow and
+    network-dependent. Real MinIO integration is verified manually in the browser
+    walkthrough, same rationale as the ai-engine test suite's identical fixture."""
+    monkeypatch.setattr(object_storage, "upload_file", lambda local_path, key: None)
+    monkeypatch.setattr(object_storage, "delete_object", lambda key: None)
+    monkeypatch.setattr(object_storage, "generate_presigned_url", lambda key, expires_in=300: f"https://fake-presigned/{key}")
 
 
 @pytest.fixture

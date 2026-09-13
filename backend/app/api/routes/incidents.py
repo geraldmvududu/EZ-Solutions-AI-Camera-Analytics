@@ -3,7 +3,7 @@ import uuid
 from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, status
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, RedirectResponse, Response
 from jose import JWTError
 from sqlalchemy import func
 from sqlalchemy.orm import Session
@@ -21,6 +21,7 @@ from app.models.user import User
 from app.schemas.analytics import NamedCount
 from app.schemas.incident import IncidentCreate, IncidentResponse, IncidentUpdate
 from app.schemas.video_intelligence import EvidenceClipUpdate, IncidentSummaryResponse, PendingEvidenceClip
+from app.services import object_storage
 
 router = APIRouter(prefix="/incidents", tags=["incidents"])
 
@@ -92,7 +93,7 @@ def get_incident(
 
 
 @router.get("/{incident_id}/evidence-clip")
-def play_incident_evidence_clip(incident_id: uuid.UUID, token: str, db: Session = Depends(get_db)) -> FileResponse:
+def play_incident_evidence_clip(incident_id: uuid.UUID, token: str, db: Session = Depends(get_db)) -> Response:
     """Inline playback for a <video> tag — mirrors recordings.py::play_recording's
     query-param-token pattern exactly, since a <video src="..."> can't send an
     Authorization header. Scoped by incident ID rather than a raw file path, so a user
@@ -111,6 +112,8 @@ def play_incident_evidence_clip(incident_id: uuid.UUID, token: str, db: Session 
     incident = db.get(Incident, incident_id)
     if incident is None or (tenant_id and incident.tenant_id != tenant_id):
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Incident not found")
+    if incident.evidence_clip_storage_key:
+        return RedirectResponse(object_storage.generate_presigned_url(incident.evidence_clip_storage_key))
     if not incident.evidence_clip_path or not os.path.isfile(incident.evidence_clip_path):
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Evidence clip not available")
 
@@ -235,5 +238,7 @@ def set_incident_evidence_clip(incident_id: uuid.UUID, payload: EvidenceClipUpda
     if incident is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Incident not found")
     incident.evidence_clip_path = payload.evidence_clip_path
+    incident.evidence_clip_storage_key = payload.evidence_clip_storage_key
+    incident.evidence_clip_size_bytes = payload.evidence_clip_size_bytes
     db.commit()
     return {"id": str(incident.id), "evidence_clip_path": incident.evidence_clip_path}
