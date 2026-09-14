@@ -3,6 +3,7 @@ import { Layout } from "../components/layout/Layout";
 import { StatCard } from "../components/ui/StatCard";
 import { getDashboardStats, getSystemHealth } from "../api/system";
 import { listEvents, listAlerts } from "../api/events";
+import { listRules, type AIRule } from "../api/misc";
 import type { AlertItem, DashboardStats, EventItem, SystemHealth } from "../types";
 import { SeverityBadge } from "../components/ui/Badge";
 
@@ -17,6 +18,7 @@ export function DashboardPage() {
   const [health, setHealth] = useState<SystemHealth | null>(null);
   const [recentEvents, setRecentEvents] = useState<EventItem[]>([]);
   const [recentAlerts, setRecentAlerts] = useState<AlertItem[]>([]);
+  const [rules, setRules] = useState<AIRule[]>([]);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
@@ -41,12 +43,20 @@ export function DashboardPage() {
     }
 
     load();
+    // Rules change rarely — fetched once rather than on every 10s poll, same as
+    // Alerts.tsx's own ruleName lookup.
+    listRules().then((r) => !cancelled && setRules(r)).catch(() => {});
     const interval = setInterval(load, 10000);
     return () => {
       cancelled = true;
       clearInterval(interval);
     };
   }, []);
+
+  function ruleName(ruleId: string | null): string | null {
+    if (!ruleId) return null;
+    return rules.find((r) => r.id === ruleId)?.name || null;
+  }
 
   return (
     <Layout title="Dashboard">
@@ -101,7 +111,7 @@ export function DashboardPage() {
             {recentAlerts.map((a) => (
               <div key={a.id} className="px-4 py-3 flex items-center justify-between text-sm">
                 <div>
-                  <div className="text-slate-200">{a.alert_type.replace(/_/g, " ")}</div>
+                  <div className="text-slate-200">{ruleName(a.rule_id) || a.alert_type.replace(/_/g, " ")}</div>
                   <div className="text-xs text-slate-500">{new Date(a.created_at).toLocaleString()}</div>
                 </div>
                 <SeverityBadge severity={a.severity} />
