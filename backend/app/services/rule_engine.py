@@ -4,7 +4,7 @@ event originated from the AI engine's real inference pipeline or from a manually
 recorded camera-offline/online transition.
 """
 
-from datetime import datetime, time
+from datetime import datetime, time, timedelta, timezone
 
 from sqlalchemy.orm import Session
 
@@ -84,9 +84,31 @@ def _rule_matches(rule: AIRule, event: Event) -> bool:
     return True
 
 
+def _recently_alerted(db: Session, rule: AIRule, camera_id) -> bool:
+    """Real bug found live on the deployed VM: a rule matching a frequently-recurring
+    event type (PERSON_DETECTED, itself already cooled down to once per 30s at the
+    ai-engine level) still got a brand-new Alert every single time — a rule on a busy
+    looping test camera produced a fresh CRITICAL alert every ~30 seconds for over an
+    hour, since evaluate_event() had no throttling of its own. Scoped per (rule,
+    camera) rather than per rule alone, so a camera-agnostic rule (camera_id=None on
+    the rule itself) matching a genuinely different camera isn't suppressed by another
+    camera's recent alert. cooldown_seconds=0 is a real, supported opt-out for an admin
+    who wants every match alerted regardless."""
+    if rule.cooldown_seconds <= 0:
+        return False
+    cutoff = datetime.now(timezone.utc) - timedelta(seconds=rule.cooldown_seconds)
+    return (
+        db.query(Alert)
+        .filter(Alert.rule_id == rule.id, Alert.camera_id == camera_id, Alert.created_at >= cutoff)
+        .first()
+        is not None
+    )
+
+
 def evaluate_event(db: Session, event: Event) -> list[Alert]:
     """Evaluates every enabled rule for this tenant against `event`. Returns the list of
-    newly created Alert rows (empty if nothing matched)."""
+    newly created Alert rows (empty if nothing matched, or if every match was
+    suppressed by that rule's own cooldown — see _recently_alerted)."""
 
     rules = (
         db.query(AIRule)
@@ -97,6 +119,8 @@ def evaluate_event(db: Session, event: Event) -> list[Alert]:
     created: list[Alert] = []
     for rule in rules:
         if not _rule_matches(rule, event):
+            continue
+        if _recently_alerted(db, rule, event.camera_id):
             continue
         alert = Alert(
             tenant_id=event.tenant_id,

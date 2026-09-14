@@ -1,6 +1,6 @@
 import uuid
 
-from sqlalchemy import Boolean, Enum, ForeignKey, JSON, String
+from sqlalchemy import Boolean, Enum, ForeignKey, Integer, JSON, String
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.database import Base
@@ -25,3 +25,17 @@ class AIRule(Base, UUIDPKMixin, TimestampMixin, TenantScopedMixin):
     action_alert_type: Mapped[str] = mapped_column(String(100), nullable=False, default="RULE_MATCH")
 
     camera_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("cameras.id"), nullable=True)
+
+    # Real bug found live on the deployed VM: a rule matching a frequently-recurring
+    # event type (here, PERSON_DETECTED — itself already cooled down to once per 30s
+    # at the ai-engine level) still got a brand-new Alert every single time that event
+    # fired, since evaluate_event() had no throttling of its own at all — a rule
+    # sitting on a busy looping test camera produced a fresh CRITICAL alert every
+    # ~30 seconds for over an hour. Every OTHER event-creation path in this codebase
+    # already learned this lesson (OBJECT_EVENT_COOLDOWN_SECONDS,
+    # TRIPWIRE_VIOLATION_COOLDOWN_SECONDS, ...); the rule engine was the one place left
+    # with none. Default (300s = 5 minutes) is deliberately longer than any single
+    # event-level cooldown, since an Alert is meant to represent something worth a
+    # human's attention, not a running tally of every qualifying event — configurable
+    # per rule for an admin who genuinely wants tighter or looser re-alerting.
+    cooldown_seconds: Mapped[int] = mapped_column(Integer, default=300, nullable=False)

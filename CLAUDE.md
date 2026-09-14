@@ -625,7 +625,7 @@ cd ai-engine && python -m app.main
 ## Testing commands
 
 ```bash
-cd backend && pytest -q      # 225 tests: auth, RBAC, tenant isolation, camera CRUD
+cd backend && pytest -q      # 229 tests: auth, RBAC, tenant isolation, camera CRUD
                               # (including the delete cascade covering every dependent
                               # table), credential encryption, rule engine, analytics
                               # aggregates, report export, the Redis-backed rate limiter
@@ -698,7 +698,13 @@ cd backend && pytest -q      # 225 tests: auth, RBAC, tenant isolation, camera C
                               # token, and the marked camera genuinely drops out of
                               # GET /cameras/internal/active — the actual mechanism
                               # that stops the ai-engine discovery loop from
-                              # restarting it)
+                              # restarting it), and the rule-engine cooldown fix (a
+                              # second match within the cooldown window creates no
+                              # second alert, a match after the window expires still
+                              # creates one, cooldown_seconds=0 genuinely disables
+                              # throttling, and the cooldown is scoped per (rule,
+                              # camera) so a camera-agnostic rule matching a different
+                              # camera isn't wrongly suppressed)
 cd ai-engine && pytest -q    # 115 tests: centroid tracker (including type-aware
                               # matching so a multi-class detector can't let a track
                               # of one object_type steal another's), zone/tripwire
@@ -1175,6 +1181,23 @@ narrowly-scoped IAM key in production — never reuse a broader-privileged crede
    silently dropping real security-relevant crossings. TRIPWIRE_VIOLATION and every
    zone/gate-jump/tailgating/theft event type keep exactly the debounce mechanism they
    already had (per-tripwire cooldown, per-(track,zone) `.observe()`) — unchanged.
+28. **`AIRule.cooldown_seconds` (default 300s) — a real, previously-missing gap found
+   live on the deployed VM**: `rule_engine.py::evaluate_event` created a brand-new
+   Alert every single time a rule matched, with no throttling of its own at all —
+   every event-creation cooldown in this file is at the ai-engine layer (limitations
+   23/24/27), and nobody had yet hit the fact that the rule engine, one layer up, had
+   none. A user-configured rule matching `PERSON_DETECTED` (itself already cooled down
+   to once per 30s) on a busy looping test camera produced a fresh CRITICAL alert
+   every ~30 seconds for over an hour — 140 alerts before it was caught. Fixed with a
+   per-(rule, camera) cooldown, checked against the most recent Alert that same rule
+   created for that same camera — `cooldown_seconds=0` is a real, supported opt-out
+   for an admin who genuinely wants every match alerted. Existing rules default to
+   300s (5 minutes) via the migration, deliberately longer than any single event-level
+   cooldown, since an Alert is meant to represent something worth a human's attention,
+   not a running tally of qualifying events. This is a distinct, independent fix from
+   limitation 27 — that one stops a redundant MOTION_DETECTED next to a PERSON_
+   DETECTED at the event layer; this one stops a rule from re-alerting on the SAME
+   rule+camera repeatedly, regardless of which event type it's configured to match.
 
 ## Current implementation status
 

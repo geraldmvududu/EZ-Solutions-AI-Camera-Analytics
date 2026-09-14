@@ -14,6 +14,7 @@ class AIRuleCreate(BaseModel):
     action_severity: EventSeverity = EventSeverity.MEDIUM
     action_alert_type: str = "RULE_MATCH"
     camera_id: uuid.UUID | None = None
+    cooldown_seconds: int = 300
 
 
 class AIRuleUpdate(BaseModel):
@@ -24,6 +25,7 @@ class AIRuleUpdate(BaseModel):
     action_severity: EventSeverity | None = None
     action_alert_type: str | None = None
     camera_id: uuid.UUID | None = None
+    cooldown_seconds: int | None = None
 
 
 class AIRuleResponse(BaseModel):
@@ -36,6 +38,7 @@ class AIRuleResponse(BaseModel):
     action_severity: EventSeverity
     action_alert_type: str
     camera_id: uuid.UUID | None
+    cooldown_seconds: int
     created_at: datetime
 
     model_config = {"from_attributes": True}

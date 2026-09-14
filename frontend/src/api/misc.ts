@@ -44,6 +44,7 @@ export interface AIRule {
   action_severity: string;
   action_alert_type: string;
   camera_id: string | null;
+  cooldown_seconds: number;
 }
 
 export const listRules = () => apiRequest<AIRule[]>("/api/rules");

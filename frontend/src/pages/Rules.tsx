@@ -14,6 +14,7 @@ function RuleFormModal({ rule, onClose, onSaved }: { rule: AIRule | null; onClos
   const [eventType, setEventType] = useState(existingEventType);
   const [severity, setSeverity] = useState(rule?.action_severity ?? "HIGH");
   const [isEnabled, setIsEnabled] = useState(rule?.is_enabled ?? true);
+  const [cooldownSeconds, setCooldownSeconds] = useState(rule?.cooldown_seconds ?? 300);
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
 
@@ -28,6 +29,7 @@ function RuleFormModal({ rule, onClose, onSaved }: { rule: AIRule | null; onClos
           conditions: { event_type: eventType },
           action_severity: severity,
           is_enabled: isEnabled,
+          cooldown_seconds: cooldownSeconds,
         });
       } else {
         await rulesApi.createRule({
@@ -35,6 +37,7 @@ function RuleFormModal({ rule, onClose, onSaved }: { rule: AIRule | null; onClos
           conditions: { event_type: eventType },
           action_severity: severity,
           action_alert_type: eventType,
+          cooldown_seconds: cooldownSeconds,
         });
       }
       onSaved();
@@ -75,6 +78,18 @@ function RuleFormModal({ rule, onClose, onSaved }: { rule: AIRule | null; onClos
               </option>
             ))}
           </select>
+        </div>
+        <div>
+          <label className="block text-xs text-slate-400 mb-1">Cooldown between alerts (seconds)</label>
+          <input
+            type="number" min={0} step={1} value={cooldownSeconds}
+            onChange={(e) => setCooldownSeconds(Number(e.target.value))}
+            className="w-full rounded bg-base-800 border border-base-600 px-3 py-1.5 text-sm text-slate-100"
+          />
+          <p className="text-xs text-slate-500 mt-1">
+            While this rule keeps matching new events, it won't create another alert until this many seconds have
+            passed since its last one (default 300 = 5 min). Set to 0 to alert on every single match.
+          </p>
         </div>
         {rule && (
           <label className="flex items-center gap-2 text-sm text-slate-300">
@@ -141,6 +156,7 @@ export function RulesPage() {
               <th className="text-left px-4 py-2">Name</th>
               <th className="text-left px-4 py-2">Condition</th>
               <th className="text-left px-4 py-2">Alert Severity</th>
+              <th className="text-left px-4 py-2">Cooldown</th>
               <th className="text-left px-4 py-2">Enabled</th>
               <th className="text-left px-4 py-2">Actions</th>
             </tr>
@@ -153,6 +169,7 @@ export function RulesPage() {
                 <td className="px-4 py-2">
                   <SeverityBadge severity={r.action_severity} />
                 </td>
+                <td className="px-4 py-2 text-slate-400">{r.cooldown_seconds === 0 ? "None" : `${r.cooldown_seconds}s`}</td>
                 <td className="px-4 py-2 text-slate-400">{r.is_enabled ? "Yes" : "No"}</td>
                 <td className="px-4 py-2">
                   <div className="flex items-center gap-3">
