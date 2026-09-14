@@ -621,6 +621,64 @@ camera) returning no frame is a transient glitch, never "finished footage," and 
 never trigger this. The Cameras table shows a "Processed" badge once set, and the
 edit form shows the timestamp.
 
+**Zone/tripwire drawing no longer races a finite/looping video**
+(`frontend/src/pages/ZonesEditor.tsx`): a real, repeated user complaint even after the
+process-once feature above — a short VIDEO_FILE test clip could still finish (or loop
+back to a different-looking moment) before the user finished clicking polygon points
+against the live MJPEG `<img>`, forcing a manual workaround (temporarily flip
+`loop_video` back on, reactivate the camera) every single time. Professional VMS
+config UIs (Milestone XProtect, Genetec Security Center, Hikvision/Dahua's own web
+consoles) never make this depend on a live stream staying available for the whole
+editing session — they freeze one reference frame first and draw over that static
+image. This editor now does the same, permanently, with zero backend changes needed
+for the common case: opening the editor shows the live stream only briefly (~1.8s,
+`AUTO_FREEZE_DELAY_MS`), then auto-captures it to an in-browser `<canvas>`
+(`captureFrameToDataUrl`) and switches to that frozen image as the actual drawing
+surface — the underlying camera can keep playing, looping, or finish its single pass
+entirely irrelevantly, since nothing about placing/saving points reads from it again.
+A "🔴 Live" / "📷 Freeze" toggle lets the user re-sample a fresh frame anytime (e.g.
+after repositioning a physical camera). For a camera with no live stream available at
+all when the editor opens (OFFLINE, or a VIDEO_FILE camera that already completed its
+one-time pass under the process-once feature) — previously a dead "camera offline"
+placeholder with no way to draw at all — it now falls back to the camera's most
+recent stored `Snapshot` (`GET /api/snapshots?camera_id=&limit=1` +
+`GET /api/snapshots/{id}/image`, the same authenticated-blob-fetch pattern
+`SnapshotImage.tsx` already used) with a "Last known frame — camera is not currently
+live" banner and a manual Refresh action. Canvas capture works cross-origin
+(`crossOrigin="anonymous"` on the stream `<img>`) because the stream endpoint is
+already behind this project's existing CORS allow-list; in the real deployed VM,
+frontend and backend are same-origin via nginx, so this never taints the canvas at
+all. This makes the earlier manual `loop_video`-toggle/`is_active`-reactivation
+workaround (used repeatedly in this session's own live demos) unnecessary — zone/
+tripwire drawing is now unconditionally available the moment a camera has ever
+produced one frame, regardless of its current playback state.
+
+**Real local-dev bug found and fixed while verifying the above**: this project's own
+documented dev command (`cd backend && uvicorn ...`) and `.claude/launch.json`'s
+actual dev-server launch command (`uvicorn ... --app-dir backend`, invoked from the
+repo root, never `cd`-ing into `backend/`) disagreed about the process's working
+directory — and `database_url`'s SQLite fallback was a bare relative path
+(`sqlite:///./ez_camera_dev.db`), so the two conventions silently created and grew
+**two different database files** (`backend/ez_camera_dev.db` vs. the repo root's own
+`ez_camera_dev.db`). Running `alembic upgrade head` from `backend/` (as documented)
+migrated the file the running dev server was never actually reading, so the live
+server kept throwing `sqlite3.OperationalError: no such column: cameras.
+video_processed_at` on every request — the exact same relative-path-resolves-against-
+whichever-cwd-happens-to-be-active bug class already fixed once for enrolled-photo
+storage (see the "photo-path persistence" entry above), just hitting the database
+connection itself instead of a stored file path this time. Fixed the same way: made
+the default `database_url` in `app/config.py` an absolute path anchored to
+`Path(__file__)` (i.e. always `backend/ez_camera_dev.db`, matching where
+`alembic.ini`/`alembic/versions/` physically live), so it's invariant to whichever
+cwd launched the process — never used in Docker/production, where `DATABASE_URL` is
+always set explicitly to the real Postgres URL. The repo-root duplicate (the one the
+live dev server had actually been writing real camera/zone/tripwire data to) was
+copied over `backend/ez_camera_dev.db` before the fix so no local dev state was lost,
+then deleted as the now-redundant, permanently-confusing duplicate. Verified for
+real: reloaded the Cameras and Zones & Tripwires pages against the now-restarted dev
+server and confirmed the existing "Main Gate" camera, its zones, and its tripwires
+all survived the switch unchanged.
+
 ## Development commands
 
 ```bash

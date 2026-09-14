@@ -1,6 +1,22 @@
 from functools import lru_cache
+from pathlib import Path
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+# The local-dev SQLite fallback used to be a bare relative path ("./ez_camera_dev.db"),
+# which resolves against whatever the CURRENT PROCESS's cwd happens to be — the exact
+# same class of bug already fixed once for enrolled-photo storage (see
+# scripts/fix_relative_face_paths.py). In practice this project's own tooling
+# disagrees on that cwd: the documented dev command is `cd backend && uvicorn ...`
+# (cwd = backend/, matching where alembic.ini/versions/ live), but .claude/launch.json
+# runs uvicorn with `--app-dir backend` from the repo root instead (cwd = repo root) —
+# so the two conventions silently created and grew two DIFFERENT sqlite files, and an
+# `alembic upgrade head` run from one cwd never touched the file the other cwd's
+# server was actually reading, surfacing as a live "no such column" 500 on every
+# request. Anchoring the default to this file's own location makes it invariant to
+# whichever cwd launched the process — never used in Docker/production, where
+# DATABASE_URL is always set explicitly to the real Postgres URL.
+_DEFAULT_SQLITE_PATH = Path(__file__).resolve().parent.parent / "ez_camera_dev.db"
 
 
 class Settings(BaseSettings):
@@ -10,7 +26,7 @@ class Settings(BaseSettings):
     tz: str = "UTC"
 
     # Database
-    database_url: str = "sqlite:///./ez_camera_dev.db"
+    database_url: str = f"sqlite:///{_DEFAULT_SQLITE_PATH.as_posix()}"
 
     # Redis
     redis_url: str = "redis://localhost:6379/0"

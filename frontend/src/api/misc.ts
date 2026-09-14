@@ -15,6 +15,17 @@ export interface Recording {
 export const listRecordings = () => apiRequest<Recording[]>("/api/recordings");
 export const getRecording = (id: string) => apiRequest<Recording>(`/api/recordings/${id}`);
 
+export interface Snapshot {
+  id: string;
+  camera_id: string;
+  taken_at: string;
+}
+
+export function listSnapshots(params: { camera_id: string; limit?: number }): Promise<Snapshot[]> {
+  const qs = new URLSearchParams({ camera_id: params.camera_id, limit: String(params.limit ?? 1) }).toString();
+  return apiRequest<Snapshot[]>(`/api/snapshots?${qs}`);
+}
+
 // Same query-param-token pattern as cameras.ts::getStreamUrl — a <video src="..."> tag
 // can't set an Authorization header.
 export function getRecordingPlayUrl(recordingId: string): string {

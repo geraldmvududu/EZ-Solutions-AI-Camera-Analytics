@@ -2,10 +2,40 @@ import { useEffect, useRef, useState, type MouseEvent } from "react";
 import { Layout } from "../components/layout/Layout";
 import * as camerasApi from "../api/cameras";
 import * as zonesApi from "../api/zones";
+import { fetchSnapshotImage, listSnapshots } from "../api/misc";
 import type { Tripwire, TripwireDirection, Zone, ZoneType } from "../api/zones";
 import type { Camera } from "../types";
 
 type DrawMode = "ZONE" | "TRIPWIRE";
+
+// Professional VMS systems (Milestone, Genetec, Hikvision/Dahua's own config UIs)
+// never make zone/tripwire drawing depend on a live stream staying available for the
+// whole editing session — they freeze a single reference frame first, then draw over
+// that static image. This is the permanent fix for "the video finishes/loops before I
+// can finish drawing": once a frame is frozen client-side (canvas capture), drawing no
+// longer cares whether the underlying camera is still running, looping, or has
+// finished a single-pass VIDEO_FILE playback — the freeze happens automatically a
+// couple seconds after the live feed starts, well within any short test clip's
+// duration. A camera with no current live feed at all (offline, or a VIDEO_FILE
+// camera that already completed its one-time pass) falls back to its most recent
+// stored Snapshot instead of a dead "camera offline" placeholder — so the editor is
+// always usable, not just while a camera happens to be actively streaming.
+const AUTO_FREEZE_DELAY_MS = 1800;
+
+function captureFrameToDataUrl(img: HTMLImageElement): string | null {
+  try {
+    const canvas = document.createElement("canvas");
+    canvas.width = img.naturalWidth || img.width;
+    canvas.height = img.naturalHeight || img.height;
+    if (canvas.width === 0 || canvas.height === 0) return null;
+    const ctx = canvas.getContext("2d");
+    if (!ctx) return null;
+    ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+    return canvas.toDataURL("image/jpeg", 0.92);
+  } catch {
+    return null; // tainted canvas (cross-origin stream without CORS clearance) — caller falls back to live view
+  }
+}
 
 export function ZonesEditorPage() {
   const [cameras, setCameras] = useState<Camera[]>([]);
@@ -23,7 +53,17 @@ export function ZonesEditorPage() {
   const [points, setPoints] = useState<[number, number][]>([]);
   const [error, setError] = useState<string | null>(null);
 
+  // Reference-frame state: `showingLive` is only true briefly while the raw stream is
+  // being sampled for an auto-freeze, or while the user explicitly asked to see it.
+  // Everything the user actually draws against is `frozenFrameUrl` — a static image,
+  // by design, so drawing never races a finite/looping video.
+  const [showingLive, setShowingLive] = useState(false);
+  const [frozenFrameUrl, setFrozenFrameUrl] = useState<string | null>(null);
+  const [referenceLabel, setReferenceLabel] = useState<string | null>(null);
+  const [loadingReference, setLoadingReference] = useState(false);
+
   const imgRef = useRef<HTMLImageElement>(null);
+  const freezeTimerRef = useRef<number | null>(null);
 
   useEffect(() => {
     camerasApi.listCameras().then((cams) => {
@@ -31,6 +71,73 @@ export function ZonesEditorPage() {
       if (cams.length > 0) setCameraId(cams[0].id);
     });
   }, []);
+
+  function clearFreezeTimer() {
+    if (freezeTimerRef.current !== null) {
+      window.clearTimeout(freezeTimerRef.current);
+      freezeTimerRef.current = null;
+    }
+  }
+
+  async function loadReferenceFromLastSnapshot(camId: string, note: string) {
+    setLoadingReference(true);
+    try {
+      const snaps = await listSnapshots({ camera_id: camId, limit: 1 });
+      if (snaps.length === 0) {
+        setFrozenFrameUrl(null);
+        setReferenceLabel(null);
+        return;
+      }
+      const url = await fetchSnapshotImage(snaps[0].id);
+      if (url) {
+        setFrozenFrameUrl(url);
+        setReferenceLabel(`${note} (captured ${new Date(snaps[0].taken_at).toLocaleString()})`);
+      }
+    } finally {
+      setLoadingReference(false);
+    }
+  }
+
+  function captureLiveFrame() {
+    if (!imgRef.current) return;
+    const dataUrl = captureFrameToDataUrl(imgRef.current);
+    clearFreezeTimer();
+    if (dataUrl) {
+      setFrozenFrameUrl(dataUrl);
+      setReferenceLabel("Frozen frame — draw at your own pace, the camera can keep running");
+      setShowingLive(false);
+    } else if (cameraId) {
+      // Cross-origin canvas tainting or a frame that hasn't decoded yet — fall back to
+      // the last stored snapshot rather than leaving the user stuck on a live image
+      // they can't freeze.
+      loadReferenceFromLastSnapshot(cameraId, "Last known frame");
+    }
+  }
+
+  function goLive() {
+    setShowingLive(true);
+    clearFreezeTimer();
+    freezeTimerRef.current = window.setTimeout(captureLiveFrame, AUTO_FREEZE_DELAY_MS);
+  }
+
+  useEffect(() => {
+    clearFreezeTimer();
+    setFrozenFrameUrl(null);
+    setReferenceLabel(null);
+    setShowingLive(false);
+    if (!cameraId) return;
+    const camera = cameras.find((c) => c.id === cameraId);
+    if (camera && camera.status === "ONLINE") {
+      // Auto-freeze shortly after the live feed starts — by the time the user has
+      // even looked at the screen, drawing no longer depends on the stream staying up.
+      setShowingLive(true);
+      freezeTimerRef.current = window.setTimeout(captureLiveFrame, AUTO_FREEZE_DELAY_MS);
+    } else {
+      loadReferenceFromLastSnapshot(cameraId, "Last known frame — camera is not currently live");
+    }
+    return clearFreezeTimer;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [cameraId, cameras]);
 
   function loadZonesAndTripwires(camId: string) {
     zonesApi.listZones(camId).then(setZones).catch(() => {});
@@ -142,20 +249,58 @@ export function ZonesEditorPage() {
                 </button>
               ))}
             </div>
+
+            {selectedCamera?.status === "ONLINE" && (
+              <div className="flex rounded border border-base-600 overflow-hidden">
+                <button
+                  onClick={goLive}
+                  disabled={showingLive}
+                  className="px-3 py-1.5 text-xs text-slate-400 hover:bg-base-800 disabled:opacity-50"
+                  title="Show the live feed again, then re-freeze a fresh reference frame"
+                >
+                  🔴 Live
+                </button>
+                <button
+                  onClick={captureLiveFrame}
+                  disabled={!showingLive}
+                  className="px-3 py-1.5 text-xs text-slate-400 hover:bg-base-800 disabled:opacity-50"
+                  title="Freeze the current frame right now"
+                >
+                  📷 Freeze
+                </button>
+              </div>
+            )}
           </div>
 
           <div className="relative rounded-lg overflow-hidden border border-base-700 bg-black" style={{ aspectRatio: "16/9" }}>
-            {selectedCamera && selectedCamera.status === "ONLINE" ? (
+            {showingLive && selectedCamera?.status === "ONLINE" ? (
               <img
                 ref={imgRef}
                 src={camerasApi.getStreamUrl(cameraId)}
                 alt="camera feed"
+                crossOrigin="anonymous"
+                className="w-full h-full object-contain cursor-crosshair select-none"
+                onClick={handleImageClick}
+              />
+            ) : frozenFrameUrl ? (
+              <img
+                ref={imgRef}
+                src={frozenFrameUrl}
+                alt="reference frame"
                 className="w-full h-full object-contain cursor-crosshair select-none"
                 onClick={handleImageClick}
               />
             ) : (
-              <div className="w-full h-full flex items-center justify-center text-slate-600 text-sm">
-                Camera offline — bring it online to draw against the live feed
+              <div className="w-full h-full flex items-center justify-center text-slate-600 text-sm text-center px-6">
+                {loadingReference
+                  ? "Loading a reference frame…"
+                  : "No frame available yet — bring the camera online, or wait for it to capture at least one snapshot."}
+              </div>
+            )}
+
+            {showingLive && (
+              <div className="absolute top-2 left-2 px-2 py-0.5 rounded bg-black/70 text-[10px] text-accent-400 uppercase tracking-wide">
+                Live — freezing automatically…
               </div>
             )}
 
@@ -213,8 +358,22 @@ export function ZonesEditorPage() {
             </svg>
           </div>
           <p className="text-xs text-slate-500 mt-2">
-            Click on the live image to place points{mode === "ZONE" ? " (3+ for a polygon)" : " (exactly 2, for the line)"}. Dashed
-            shapes are already-saved zones/tripwires for this camera.
+            Click to place points{mode === "ZONE" ? " (3+ for a polygon)" : " (exactly 2, for the line)"}. Dashed shapes are
+            already-saved zones/tripwires for this camera.
+            {!showingLive && referenceLabel && (
+              <>
+                {" "}
+                <span className="text-accent-400">{referenceLabel}.</span>{" "}
+                {selectedCamera?.status !== "ONLINE" && (
+                  <button
+                    onClick={() => loadReferenceFromLastSnapshot(cameraId, "Last known frame — camera is not currently live")}
+                    className="underline text-slate-400 hover:text-slate-300"
+                  >
+                    Refresh
+                  </button>
+                )}
+              </>
+            )}
           </p>
         </div>
 
