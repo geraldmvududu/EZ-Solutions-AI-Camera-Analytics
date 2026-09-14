@@ -95,6 +95,10 @@ export interface Incident {
   review_decision: string;
   evidence_clip_path: string | null;
   source_event_id: string | null;
+  // Master Development Prompt Phase 1, "Multi-event Incident Correlation" — every
+  // Event ever merged into this incident (the original triggering one plus any later
+  // correlated ones), ordered by occurrence.
+  linked_events: { id: string; event_type: string; occurred_at: string }[];
 }
 
 export const listIncidents = () => apiRequest<Incident[]>("/api/incidents");
@@ -128,6 +132,7 @@ export interface VideoIntelligenceSettings {
   business_hours_start: string;
   business_hours_end: string;
   incident_cooldown_seconds: number;
+  correlation_window_seconds: number;
 }
 
 export const getVideoIntelligenceSettings = () => apiRequest<VideoIntelligenceSettings>("/api/video-intelligence-settings");

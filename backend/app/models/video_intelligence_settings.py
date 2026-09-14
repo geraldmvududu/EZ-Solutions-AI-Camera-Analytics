@@ -37,3 +37,14 @@ class VideoIntelligenceSettings(Base, UUIDPKMixin, TimestampMixin, TenantScopedM
     # Scoped per (camera, incident_type) in violation_service.py — a genuinely
     # different incident TYPE on the same camera still gets its own Incident.
     incident_cooldown_seconds: Mapped[int] = mapped_column(Integer, default=300, nullable=False)
+    # Master Development Prompt Phase 1, "Multi-event Incident Correlation" — a real
+    # correlation window, distinct from and complementary to incident_cooldown_seconds
+    # above: the cooldown suppresses a same-camera/same-type repeat outright (the
+    # looping-test-video fix), while this window MERGES a later event of a DIFFERENT
+    # type for the SAME tracked person/object into the already-open incident instead of
+    # creating a second one (the master prompt's own worked example: person detected ->
+    # entered zone -> loitered -> object removed becoming one incident, not four).
+    # Deliberately shorter than incident_cooldown_seconds' 300s default — correlation
+    # requires the SAME tracking_id/person_id, a much stronger signal than the coarse
+    # cooldown's camera+type-only scope, so a shorter window is appropriate.
+    correlation_window_seconds: Mapped[int] = mapped_column(Integer, default=120, nullable=False)

@@ -16,6 +16,18 @@ incident_alerts = Table(
     Column("alert_id", Uuid, ForeignKey("alerts.id"), primary_key=True),
 )
 
+# Master Development Prompt Phase 1, "Multi-event Incident Correlation" — mirrors
+# incident_alerts exactly, giving each incident a real, queryable timeline of every
+# Event that was ever merged into it (not just the single source_event_id it was
+# created from). See violation_service.py's correlation logic for how entries land here.
+incident_events = Table(
+    "incident_events",
+    Base.metadata,
+    Column("incident_id", Uuid, ForeignKey("incidents.id"), primary_key=True),
+    Column("event_id", Uuid, ForeignKey("events.id"), primary_key=True),
+    Column("occurred_at", DateTime(timezone=True), nullable=False),
+)
+
 
 class IncidentStatus(str, enum.Enum):
     OPEN = "OPEN"
@@ -66,4 +78,17 @@ class Incident(Base, UUIDPKMixin, TimestampMixin, TenantScopedMixin):
     # Alert join would silently skip evidence-clip generation for those tenants.
     source_event_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("events.id"), nullable=True, index=True)
 
+    # Master Development Prompt Phase 1, "Multi-event Incident Correlation" — a
+    # denormalized lookup key (f"{camera_id}:track:{tracking_id}" or
+    # f"{camera_id}:person:{person_id}") set at creation time, avoiding a join through
+    # events for every correlation check on every new violation event. NULL when the
+    # triggering event carried neither a tracking_id nor a person_id (correlation is
+    # then simply never attempted for this incident — it behaves exactly as before this
+    # feature existed). See violation_service.py::_compute_correlation_key.
+    correlation_key: Mapped[str | None] = mapped_column(String(300), nullable=True, index=True)
+
     related_alerts = relationship("Alert", secondary=incident_alerts, lazy="selectin")
+    # The full, ordered timeline of every Event merged into this incident (the original
+    # source_event_id plus every later correlated one) — see the module docstring in
+    # violation_service.py for how/when entries are added.
+    linked_events = relationship("Event", secondary=incident_events, lazy="selectin", order_by="Event.occurred_at")

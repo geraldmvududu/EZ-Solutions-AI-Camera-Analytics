@@ -89,6 +89,22 @@ function IncidentDetailModal({
           <p className="text-sm text-slate-200 bg-base-800 rounded border border-base-700 p-3 whitespace-pre-wrap">{incident.description || "—"}</p>
         </div>
 
+        {incident.linked_events && incident.linked_events.length > 1 && (
+          <div>
+            <div className="text-xs text-slate-400 mb-1">
+              Timeline ({incident.linked_events.length} correlated events — same tracked person/object on this camera)
+            </div>
+            <div className="divide-y divide-base-700 rounded border border-base-700 overflow-hidden">
+              {incident.linked_events.map((e) => (
+                <div key={e.id} className="px-3 py-2 text-xs flex items-center justify-between bg-base-800">
+                  <span className="text-slate-200">{e.event_type.replace(/_/g, " ")}</span>
+                  <span className="text-slate-500">{new Date(e.occurred_at).toLocaleTimeString()}</span>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
         {incident.evidence_clip_path && (
           <div>
             <button onClick={() => setViewingEvidenceClip(true)} className="text-accent-500 hover:underline text-xs">

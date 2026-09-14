@@ -102,6 +102,27 @@ export function VideoIntelligenceSettingsPage() {
         </div>
 
         <div className="rounded-lg border border-base-700 bg-base-900 p-4 space-y-3">
+          <div className="font-semibold text-slate-200 text-sm">Incident correlation</div>
+          <div>
+            <label className="block text-xs text-slate-400 mb-1">Correlation window (seconds)</label>
+            <input
+              type="number"
+              min={0}
+              value={settings.correlation_window_seconds}
+              onChange={(e) => setSettings({ ...settings, correlation_window_seconds: Number(e.target.value) })}
+              className="w-full rounded bg-base-800 border border-base-600 px-2 py-1.5 text-sm text-slate-100"
+            />
+          </div>
+          <p className="text-xs text-slate-500">
+            A later event for the SAME tracked person/object on the same camera within this window is merged into
+            the already-open incident (growing its timeline) instead of creating a second one — e.g. "person
+            detected" then "entered restricted zone" then "object removed" becomes one incident, not three. Requires
+            the same tracking identity, so it's independent of (and typically shorter than) the incident cooldown
+            above. Set to 0 to disable correlation entirely — every violation always creates its own incident.
+          </p>
+        </div>
+
+        <div className="rounded-lg border border-base-700 bg-base-900 p-4 space-y-3">
           <div className="font-semibold text-slate-200 text-sm">Evidence clips</div>
           <div className="grid grid-cols-2 gap-3">
             <div>

@@ -17,6 +17,7 @@ class VideoIntelligenceSettingsUpdate(BaseModel):
     business_hours_start: str | None = None
     business_hours_end: str | None = None
     incident_cooldown_seconds: int | None = None
+    correlation_window_seconds: int | None = None
 
 
 class VideoIntelligenceSettingsResponse(BaseModel):
@@ -32,6 +33,7 @@ class VideoIntelligenceSettingsResponse(BaseModel):
     business_hours_start: str
     business_hours_end: str
     incident_cooldown_seconds: int
+    correlation_window_seconds: int
 
     model_config = {"from_attributes": True}
 

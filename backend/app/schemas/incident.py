@@ -6,6 +6,7 @@ from pydantic import BaseModel
 from app.models.event import EventSeverity
 from app.models.incident import IncidentStatus
 from app.schemas.alert import AlertResponse
+from app.schemas.event import EventResponse
 
 
 class IncidentCreate(BaseModel):
@@ -51,5 +52,9 @@ class IncidentResponse(BaseModel):
     evidence_clip_path: str | None
     source_event_id: uuid.UUID | None
     related_alerts: list[AlertResponse] = []
+    # Master Development Prompt Phase 1, "Multi-event Incident Correlation" — every
+    # Event ever merged into this incident (the original triggering one plus any later
+    # correlated ones), ordered by occurrence — the real timeline the frontend renders.
+    linked_events: list[EventResponse] = []
 
     model_config = {"from_attributes": True}

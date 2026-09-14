@@ -91,18 +91,22 @@ def test_gate_jumping_cooldown_allows_a_new_incident_after_the_window_expires(cl
     settings.incident_cooldown_seconds = 300
     db_session.commit()
 
-    def _post_gate_jump():
+    def _post_gate_jump(tracking_id):
         return client.post(
             "/api/events",
             json={
                 "camera_id": cam["id"], "event_type": "GATE_JUMPING_DETECTED", "severity": "HIGH",
                 "occurred_at": datetime.now(timezone.utc).isoformat(),
-                "event_metadata": {"direction": "ENTERING", "tracking_id": 1, "confidence": 0.82},
+                "event_metadata": {"direction": "ENTERING", "tracking_id": tracking_id, "confidence": 0.82},
             },
             headers=INTERNAL_HEADERS,
         )
 
-    assert _post_gate_jump().status_code == 201
+    # Two DIFFERENT tracking_ids — real loop-video playback reassigns a fresh
+    # tracking_id every pass (see limitation 24), which is exactly the scenario this
+    # cooldown exists for; a shared tracking_id would instead exercise the separate
+    # correlation mechanism (see test_incident_correlation.py), not cooldown expiry.
+    assert _post_gate_jump(1).status_code == 201
     incidents = client.get("/api/incidents", headers=auth_headers(token)).json()
     assert len(incidents) == 1
     # Backdate the existing incident past the cooldown window — a real gap in
@@ -111,7 +115,7 @@ def test_gate_jumping_cooldown_allows_a_new_incident_after_the_window_expires(cl
     incident.created_at = datetime.now(timezone.utc) - timedelta(seconds=301)
     db_session.commit()
 
-    assert _post_gate_jump().status_code == 201
+    assert _post_gate_jump(2).status_code == 201
     incidents = client.get("/api/incidents", headers=auth_headers(token)).json()
     assert len(incidents) == 2, "a genuinely new gate-jump after the cooldown has elapsed must still create an incident"
 
@@ -125,19 +129,22 @@ def test_gate_jumping_cooldown_zero_disables_throttling(client, db_session, admi
     settings.incident_cooldown_seconds = 0
     db_session.commit()
 
-    def _post_gate_jump():
+    def _post_gate_jump(tracking_id):
         return client.post(
             "/api/events",
             json={
                 "camera_id": cam["id"], "event_type": "GATE_JUMPING_DETECTED", "severity": "HIGH",
                 "occurred_at": datetime.now(timezone.utc).isoformat(),
-                "event_metadata": {"direction": "ENTERING", "tracking_id": 1, "confidence": 0.82},
+                "event_metadata": {"direction": "ENTERING", "tracking_id": tracking_id, "confidence": 0.82},
             },
             headers=INTERNAL_HEADERS,
         )
 
-    assert _post_gate_jump().status_code == 201
-    assert _post_gate_jump().status_code == 201
+    # Different tracking_ids so the separate correlation mechanism (same tracking_id,
+    # see test_incident_correlation.py) doesn't merge these two — this test is
+    # specifically about incident_cooldown_seconds=0, not correlation.
+    assert _post_gate_jump(1).status_code == 201
+    assert _post_gate_jump(2).status_code == 201
 
     incidents = client.get("/api/incidents", headers=auth_headers(token)).json()
     assert len(incidents) == 2
@@ -154,19 +161,22 @@ def test_incident_cooldown_is_scoped_per_incident_type(client, db_session, admin
     settings.incident_cooldown_seconds = 300
     db_session.commit()
 
-    def _post(event_type):
+    def _post(event_type, tracking_id):
         return client.post(
             "/api/events",
             json={
                 "camera_id": cam["id"], "event_type": event_type, "severity": "HIGH",
                 "occurred_at": datetime.now(timezone.utc).isoformat(),
-                "event_metadata": {"tracking_id": 1, "confidence": 0.82, "threshold_seconds": 10},
+                "event_metadata": {"tracking_id": tracking_id, "confidence": 0.82, "threshold_seconds": 10},
             },
             headers=INTERNAL_HEADERS,
         )
 
-    assert _post("GATE_JUMPING_DETECTED").status_code == 201
-    assert _post("RESTRICTED_AREA_VIOLATION").status_code == 201
+    # Different tracking_ids — two genuinely unrelated presences/occurrences, not the
+    # same tracked person triggering two different violation types (that's correlation's
+    # job, see test_incident_correlation.py, and would correctly merge into one).
+    assert _post("GATE_JUMPING_DETECTED", 1).status_code == 201
+    assert _post("RESTRICTED_AREA_VIOLATION", 2).status_code == 201
 
     incidents = client.get("/api/incidents", headers=auth_headers(token)).json()
     assert len(incidents) == 2

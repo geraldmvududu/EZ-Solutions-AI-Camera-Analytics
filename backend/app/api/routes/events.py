@@ -142,12 +142,14 @@ async def create_event_and_process(db: Session, camera: Camera, payload: EventCr
         # the event loop thread so one alert's push delivery can't stall other requests.
         await to_thread.run_sync(notify_users_of_alert, db, alert, camera)
 
-    incident = maybe_create_violation_incident(db, event, alerts, camera)
-    if incident is not None:
+    incident_result = maybe_create_violation_incident(db, event, alerts, camera)
+    if incident_result is not None:
         from app.schemas.incident import IncidentResponse
 
+        incident, was_new = incident_result
         log_action(
-            db, action="INCIDENT_AUTO_CREATED", tenant_id=camera.tenant_id,
+            db, action="INCIDENT_AUTO_CREATED" if was_new else "INCIDENT_CORRELATED",
+            tenant_id=camera.tenant_id,
             resource_type="incident", resource_id=str(incident.id),
             details={"event_id": str(event.id), "title": incident.title},
         )

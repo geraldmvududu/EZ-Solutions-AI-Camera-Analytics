@@ -747,6 +747,61 @@ and the Cameras page kept showing "ONLINE" forever.
   construction. Fixed by initializing to `float("-inf")`, the same
   never-yet-reported-means-never-in-cooldown fix this project has applied elsewhere.
 
+**Master Development Prompt Phase 1 — Multi-event Incident Correlation**
+(`backend/app/services/violation_service.py`, `backend/app/models/incident.py`): the
+second of four sub-phases (see the Camera & System Health entry above for the master
+prompt's full context). Real gap found by direct code read:
+`violation_service.py::maybe_create_violation_incident` always dispatched on exactly one
+triggering `Event`, with zero logic to merge a later, related event into an already-open
+Incident — the literal gap behind the master prompt's own worked examples ("person
+detected -> entered zone -> loitered -> object removed" should become ONE incident, not
+four).
+
+- `Incident.correlation_key` (new, indexed, nullable) — a denormalized lookup key set at
+  creation time (`f"{camera_id}:track:{tracking_id}"`, or `f"{camera_id}:person:
+  {person_id}"` when no `tracking_id` is present) — avoids a join through events for
+  every correlation check on every new violation event. `tracking_id` is preferred since
+  it's present in `event_metadata` for every violation event type `worker.py` creates
+  (TRIPWIRE_VIOLATION, INTRUSION_DETECTED, GATE_JUMPING_DETECTED, TAILGATING_DETECTED,
+  RESTRICTED_AREA_VIOLATION, POTENTIAL_THEFT_DETECTED) — not a stronger identity claim
+  than `person_id`, just a more universally available one (face recognition might never
+  match).
+- New `incident_events` join table (mirrors `incident_alerts` exactly) gives each
+  incident a real, queryable timeline — every `Event` ever merged into it, not just the
+  single `source_event_id` it was created from — exposed as `Incident.linked_events` /
+  `IncidentResponse.linked_events`, ordered by occurrence.
+- Before creating a new Incident, both `_maybe_create_always_incident` and
+  `_maybe_create_identified_person_incident` now check for an existing OPEN/
+  INVESTIGATING/CONTAINED incident with the same `correlation_key` whose `updated_at` is
+  within `VideoIntelligenceSettings.correlation_window_seconds` (new, default 120s). If
+  found: the new event links into `incident_events`, its Alerts merge into
+  `related_alerts`, `severity` escalates to the higher of the two (a real, documented
+  `_SEVERITY_RANK`), and `description` grows a real timeline section (`"HH:MM:SS —
+  <Event Type>"` per linked event, seeded from the original source event's own
+  time/type the first time correlation ever happens) — matching the master prompt's own
+  timeline example format verbatim. `Incidents.tsx`'s detail modal renders this both as
+  the description's own embedded text and as a separate structured list. If no
+  correlation match: create a new Incident exactly as before, with `correlation_key` set
+  for future matches.
+- Deliberately a SEPARATE, narrower mechanism from the existing `_recently_had_incident`
+  cooldown (same-camera/same-`incident_type`, no tracking awareness, default 300s) —
+  correlation runs first (a stronger, more specific match: same tracked presence,
+  merges across DIFFERENT incident types), cooldown runs second as a fallback. Both are
+  needed: a looping test video's repeated crossings get a fresh `tracking_id` every loop
+  pass (limitation 24), so correlation alone would not have fixed the original
+  repeated-incident bug cooldown was built for.
+- `maybe_create_violation_incident` now returns `tuple[Incident, bool] | None` (the
+  incident, and whether it was newly created vs. correlated into) so
+  `events.py::create_event_and_process` can log the accurate audit action
+  (`INCIDENT_AUTO_CREATED` vs. `INCIDENT_CORRELATED`) instead of always claiming
+  "created" for what might be a merge.
+- Real, disclosed scope limit: correlation only ever applies when the triggering event
+  carries a `tracking_id` or `person_id` — an event type that carries neither (there are
+  none today, but a future one could) always creates its own incident, exactly as before
+  this feature existed. A `RESOLVED`/`CLOSED` incident is a finished case file and is
+  never a correlation target — a later event sharing its `correlation_key` opens a fresh
+  incident rather than silently reopening a closed one.
+
 ## Development commands
 
 ```bash
@@ -769,7 +824,7 @@ cd ai-engine && python -m app.main
 ## Testing commands
 
 ```bash
-cd backend && pytest -q      # 238 tests: auth, RBAC, tenant isolation, camera CRUD
+cd backend && pytest -q      # 245 tests: auth, RBAC, tenant isolation, camera CRUD
                               # (including the delete cascade covering every dependent
                               # table), credential encryption, rule engine, analytics
                               # aggregates, report export, the Redis-backed rate limiter
@@ -864,7 +919,18 @@ cd backend && pytest -q      # 238 tests: auth, RBAC, tenant isolation, camera C
                               # heartbeat arriving after the camera was marked OFFLINE
                               # creates exactly one, and both the internal-token and
                               # unknown-camera-404 gates are enforced the same way every
-                              # other internal endpoint already is)
+                              # other internal endpoint already is), and multi-event
+                              # incident correlation (Master Development Prompt Phase 1
+                              # — two different violation types for the SAME tracking_id
+                              # merge into one incident with a real 2-entry timeline,
+                              # severity escalates to the higher of the two, a genuinely
+                              # different tracking_id on the same camera still gets its
+                              # own incident, a correlation match past the window
+                              # creates a new incident instead of merging,
+                              # correlation_window_seconds=0 disables correlation
+                              # entirely, a RESOLVED/CLOSED incident is never a
+                              # correlation target, and the person_id fallback works
+                              # standalone for the identified-person path)
 cd ai-engine && pytest -q    # 124 tests: centroid tracker (including type-aware
                               # matching so a multi-class detector can't let a track
                               # of one object_type steal another's), zone/tripwire
@@ -1426,7 +1492,7 @@ narrowly-scoped IAM key in production — never reuse a broader-privileged crede
 | 10. Facial Recognition & Identity Analytics | Phase 1 + Phase 2 done, tested, verified in a real browser — enroll/manage people, real detect→embed→match pipeline, recognition events feeding the existing event/alert/rule/notification/WebSocket pipeline, camera + zone config, human review, identified-person violation → auto-Incident, recordings linked to face/violation events with in-browser seekable playback, multi-frame confirmation, liveness (narrow scope, limitation 12), retention enforcement, and a CSV appearance-history export. Full drag-and-drop rules-builder UI is still out of scope (rules are managed via the existing generic Rules page) |
 | 11. AI Video Intelligence | Phase 1 + Phase 2 done, tested, verified in a real browser — gate-jumping/climbing (heuristic), tailgating, restricted-area, and now potential-theft detection (real YOLOv8n multi-class detector, opt-in per camera; backpack/handbag/suitcase removal from a monitored zone) extending the existing tripwire/zone pipeline; a real, transparent risk score; auto-created Incidents with a template-based (not LLM) AI summary; real ffmpeg-trimmed evidence clips; a dashboard and settings page; a PDF report section. Abandoned-object detection (not requested) and fall detection (Phase 3, needs pose estimation) are deliberately not built yet — see limitations 17-19 |
 | 12. Event-First Cloud Storage | Phase 1 done, tested — Site hierarchy (Customer → Site → Camera), a real object-storage abstraction (MinIO in dev / real AWS S3 in production, same code path) with presigned-URL serving, configurable per-tenant retention tiers with worker-side enforcement, per-event review/notes/categorization with real filter UI on Events/Alerts, a storage-usage dashboard, and a new SECURITY_MANAGER role. See limitations 20-22 for the explicit out-of-scope list (multi-channel alerts, offline edge queue-and-sync, generalized dedup/cooldown config, per-user site-level RBAC, S3 lifecycle policies, AWS Cost Explorer billing) |
-| 13. Master Development Prompt Phase 1 | Sub-phase 1 (Camera & System Health) done, tested, verified live — real auto-offline detection on heartbeat staleness, real OFFLINE→ONLINE transition event, and a disclosed (not trained) lens-obstruction heuristic. Sub-phases 2-4 (multi-event incident correlation, license plate reading/ANPR, crowd/occupancy counting) in progress. Weapons, fire/smoke, PPE, fight/violence, and fall detection deliberately skipped — no trained model this environment can obtain/verify exists for any of them, and the user chose honesty over a feature that looks reliable but isn't for safety-critical categories |
+| 13. Master Development Prompt Phase 1 | Sub-phase 1 (Camera & System Health) and sub-phase 2 (Multi-event Incident Correlation) done, tested, verified live — real auto-offline detection, the OFFLINE→ONLINE transition event, a disclosed lens-obstruction heuristic, and merging related violation events for the same tracked person/object into one growing incident instead of several. Sub-phases 3-4 (crowd/occupancy counting, license plate reading/ANPR) in progress. Weapons, fire/smoke, PPE, fight/violence, and fall detection deliberately skipped — no trained model this environment can obtain/verify exists for any of them, and the user chose honesty over a feature that looks reliable but isn't for safety-critical categories |
 
 ## Verified end-to-end (not just "should work")
 
@@ -1894,3 +1960,25 @@ narrowly-scoped IAM key in production — never reuse a broader-privileged crede
   near-zero-variance frame; the same honest verification boundary already applied to
   AI Video Intelligence Phase 1/2's synthetic-camera limits. `cd backend && pytest -q`
   (238), `cd ai-engine && pytest -q` (124), and `cd worker && pytest -q` (25) all green.
+- **Master Development Prompt Phase 1 — Multi-event Incident Correlation, end-to-end
+  against the real local dev backend.** Posted a real `RESTRICTED_AREA_VIOLATION` event
+  (MEDIUM severity) for the "Main Gate" camera with a synthetic `tracking_id`, then a
+  `POTENTIAL_THEFT_DETECTED` event (CRITICAL) for the SAME `tracking_id` a second later,
+  both via the actual internal `POST /api/events` endpoint (as ai-engine would). Confirmed
+  in the real browser: exactly ONE new Incident was created (not two), its severity had
+  escalated to CRITICAL (the higher of the two), its description contained a real,
+  correctly-time-labeled "Timeline:" section for both events, and the detail modal's
+  separate structured timeline list showed both `POTENTIAL THEFT DETECTED` and
+  `TAILGATING DETECTED` (a second test run) with their real timestamps. One real
+  test-setup pitfall caught along the way: an initial live check immediately after saving
+  the code showed only 1 of 2 expected `linked_events` — re-running moments later (giving
+  uvicorn's `--reload` time to actually restart) showed the correct 2, and the dedicated
+  automated test (which exercises the current in-process app directly, not a
+  possibly-stale reloaded one) had already passed throughout, confirming this was a
+  dev-server reload race in the manual check, not a real code bug. Also caught and fixed,
+  before this pass: three pre-existing tests in `test_video_intelligence_incidents.py`
+  that shared one `tracking_id` across two posts now legitimately correlate under the new
+  feature — updated them to use distinct `tracking_id`s so they keep testing exactly what
+  they always meant to (cooldown expiry, cooldown disabling, per-type scoping), each now
+  a documented example distinguishing correlation's job from cooldown's. `cd backend &&
+  pytest -q` (245) and `cd frontend && npm run build` both green throughout.
