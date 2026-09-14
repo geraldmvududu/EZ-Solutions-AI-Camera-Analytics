@@ -260,6 +260,29 @@ synthetic test fixtures) posted through the real `/api/faces/enroll` endpoint:
    enrolled photo through the actual endpoint and confirmed the new photo — not the
    old one — rendered in the Enrolled People table afterward.
 
+   Second follow-up, on the deployed VM, after the user reported (repeatedly) that two
+   specific enrolled people ("Ellah miss-e" and the tenant admin's own profile) still
+   showed no photo even after the fixes above shipped: this was NOT the same bug
+   recurring. `SELECT image_reference FROM face_profiles` showed both rows still
+   storing the OLD relative path (`./data/faces/<tenant>/<uuid>.jpg`) — meaning both
+   were enrolled before `FACE_PATH` was added to the VM's `.env`, so their photo files
+   were written to the backend container's ephemeral filesystem the moment they were
+   uploaded, not the bind-mounted `/data/faces` volume. Confirmed directly on the VM:
+   `/data/faces` inside the backend container contains only `.gitkeep` — the files
+   never existed at any persistent location, so no code fix can recover them; this is
+   exactly the "already-affected rows... permanently unrecoverable" case documented
+   above, now confirmed to be these two specific rows rather than a hypothetical. Then
+   verified, end-to-end against the real live backend, that a **new** enrollment today
+   is genuinely fixed: enrolled a real test person with a real photo via
+   `POST /api/faces/enroll`, confirmed the resulting `image_reference` was a real
+   absolute path (`/data/faces/<tenant>/<uuid>.jpg`) that actually exists inside the
+   container, fetched it back through `GET /api/faces/{id}/photo` and confirmed the
+   exact same 174,022-byte JPEG came back byte-for-byte, then deleted the test person
+   to avoid leaving synthetic data in the tenant's real Enrolled People list. The fix
+   is correct and verified; "Ellah miss-e" and the admin's own profile specifically
+   need to be re-enrolled with a new photo through the UI — there's nothing left to
+   patch in code for them.
+
 **AI Video Intelligence, Phase 1** (`app/services/violation_service.py`,
 `ai-engine/app/core/tripwire_analysis.py`): extends the existing tripwire/zone
 pipeline rather than adding a parallel detection system — nearly everything the
@@ -548,7 +571,7 @@ cd ai-engine && python -m app.main
 ## Testing commands
 
 ```bash
-cd backend && pytest -q      # 208 tests: auth, RBAC, tenant isolation, camera CRUD
+cd backend && pytest -q      # 215 tests: auth, RBAC, tenant isolation, camera CRUD
                               # (including the delete cascade covering every dependent
                               # table), credential encryption, rule engine, analytics
                               # aggregates, report export, the Redis-backed rate limiter
@@ -592,14 +615,23 @@ cd backend && pytest -q      # 208 tests: auth, RBAC, tenant isolation, camera C
                               # list filters, and the storage-usage aggregate hand-
                               # verified against real seeded file sizes), the per-event
                               # PDF export endpoint (real reportlab PDF bytes + tenant
-                              # isolation), and two more instances of the naive-
-                              # db.delete()-crashes-on-a-real-dependent-row bug class
-                              # found live on the deployed VM (delete_camera not
-                              # cleaning up Notification/incident_alerts/Incident
-                              # references, delete_rule having no dependent-row
-                              # handling at all) — all against a real in-memory
-                              # SQLite DB through the actual FastAPI app
-cd ai-engine && pytest -q    # 91 tests: centroid tracker (including type-aware
+                              # isolation, plus the snapshot-image-embedding fix: a real
+                              # local-file JPEG and a real cloud-stored-via-storage_key
+                              # snapshot both land in the PDF as a genuine embedded
+                              # /DCTDecode image, a missing/unreadable snapshot file
+                              # degrades to a plain "not available" line instead of
+                              # breaking the export, and an event with no snapshot at
+                              # all renders unchanged from before), object_storage's new
+                              # download_object (real bytes back, using the internal —
+                              # never the public presign — client, since this is a
+                              # server-side read with no browser to hand a redirect to),
+                              # and two more instances of the naive-db.delete()-crashes-
+                              # on-a-real-dependent-row bug class found live on the
+                              # deployed VM (delete_camera not cleaning up Notification/
+                              # incident_alerts/Incident references, delete_rule having
+                              # no dependent-row handling at all) — all against a real
+                              # in-memory SQLite DB through the actual FastAPI app
+cd ai-engine && pytest -q    # 95 tests: centroid tracker (including type-aware
                               # matching so a multi-class detector can't let a track
                               # of one object_type steal another's), zone/tripwire
                               # geometry, loitering timer, motion detection (real MOG2 background
@@ -635,7 +667,15 @@ cd ai-engine && pytest -q    # 91 tests: centroid tracker (including type-aware
                               # track within the cooldown window must not spam a
                               # second event, one after the cooldown expires must
                               # still be reported, and the very first detection a
-                              # camera ever makes must never be swallowed)
+                              # camera ever makes must never be swallowed), and the
+                              # real TRIPWIRE_VIOLATION_COOLDOWN_SECONDS bug fix (a
+                              # second, different track_id crossing the SAME tripwire
+                              # within the cooldown must not spam a second event, a
+                              # crossing after the cooldown expires must still be
+                              # reported, the very first crossing must never be
+                              # swallowed, and two DIFFERENT tripwires crossed by the
+                              # same movement must each still get their own event —
+                              # cooldowns are independent per tripwire, not global)
 cd worker && pytest -q       # 16 tests: retention cleanup for recordings/snapshots/
                               # face-recognition-events/face-profiles against a real
                               # SQLite DB with a hand-crafted minimal schema (the
@@ -911,10 +951,30 @@ narrowly-scoped IAM key in production — never reuse a broader-privileged crede
    producing ~30k snapshots and 57 recordings for one camera in under a day). The fix
    trades a small amount of real coverage for that: if two genuinely different people
    enter the same camera's frame within 30 seconds of each other, only the first gets
-   its own event+snapshot; the second is silently absorbed by the cooldown. Zone/
-   tripwire/violation events (LOITERING_DETECTED, TRIPWIRE_VIOLATION, etc.) are
-   unaffected — each already has its own real per-track/per-zone debounce logic and
-   does not share this cooldown.
+   its own event+snapshot; the second is silently absorbed by the cooldown.
+   LOITERING_DETECTED/RESTRICTED_AREA_VIOLATION already had their own real per-(track,
+   zone) "once per continuous stay" debounce (`LoiteringTracker`) before this fix and
+   don't share this cooldown — but see limitation 24 below: TRIPWIRE_VIOLATION did NOT
+   have any debounce of its own, which this entry originally (incorrectly) implied it
+   did.
+24. **`TRIPWIRE_VIOLATION_COOLDOWN_SECONDS` (ai-engine/app/worker.py, 30s) — a second,
+   independent instance of the same track-churn bug class as limitation 23, found live
+   on the same deployed VM**: `_check_tripwires` had zero debounce of any kind — every
+   single frame where a tracked centroid genuinely crossed a tripwire's line fired its
+   own `TRIPWIRE_VIOLATION` event, with no equivalent of `LoiteringTracker`'s "once per
+   continuous stay" gate. A tracked object jittering right at a tripwire line (or,
+   worse, a synthetic SIMULATED-camera object oscillating back and forth across it) got
+   reassigned a brand-new track_id by `CentroidTracker` every ~10-25 seconds, and each
+   one fired again — one camera produced **535 TRIPWIRE_VIOLATION events in ~2 hours,
+   all attached to the exact same `recording_id`** (535 reported "incidents" for what
+   was really one continuous scene). Fixed with a per-tripwire (not per-track_id, since
+   the whole bug is that track_id keeps changing for what's really the same presence)
+   30-second cooldown, `self._last_tripwire_violation_sent: dict[str, float]` — the
+   same accepted trade-off as limitation 23: two genuinely different real crossings of
+   the same tripwire within 30s means only the first is reported. Gates the downstream
+   `GATE_JUMPING_DETECTED`/`TAILGATING_DETECTED` checks for that same crossing too,
+   since they're evaluated from the same (now-suppressed) crossing event. Covered by
+   `ai-engine/tests/test_tripwire_violation_cooldown.py`.
 
 ## Current implementation status
 
@@ -1280,3 +1340,58 @@ narrowly-scoped IAM key in production — never reuse a broader-privileged crede
   `cd backend && pytest -q` (208), `cd ai-engine && pytest -q` (91),
   `cd worker && pytest -q` (16), and `cd frontend && npm run build` all green
   throughout every fix in this pass.
+- **Two more real bugs found live on the deployed VM in the same pass, plus one
+  feature gap closed, all verified against real data rather than fixed speculatively**:
+  1. **The per-event PDF export (`GET /api/reports/events/{id}.pdf`) never actually
+     showed the event's picture** — it rendered every field the Events page's detail
+     modal shows except the one thing (the snapshot image) most reports are actually
+     wanted for. Fixed by having `build_event_detail_pdf` embed the real image bytes
+     via reportlab's `Image` flowable, scaled to fit while preserving aspect ratio. The
+     bytes themselves come from a new `app/services/object_storage.py::download_object`
+     (deliberately NOT duplicated to the ai-engine copy — see its own docstring — since
+     ai-engine only ever uploads objects it just created, never reads one back) for a
+     cloud-stored snapshot, or straight off local disk otherwise — the same
+     storage_key-vs-file_path branch `GET /snapshots/{id}/image` already uses, except a
+     server-side PDF has no browser to hand a redirect to, so this reads real bytes
+     instead of 307-ing. A missing/unreadable snapshot degrades to a plain
+     "not available" line rather than breaking the export — same "never let a
+     best-effort enhancement break the caller's real work" convention as
+     `object_storage.upload_file`. Verified via `tests/test_event_pdf_export.py`: a
+     real local JPEG and a real (mocked-boto3) cloud-stored JPEG both land in the PDF
+     as a genuine embedded `/DCTDecode` image object, not merely referenced.
+  2. **`TRIPWIRE_VIOLATION` events were being duplicated at a scale that dwarfed the
+     PERSON_DETECTED bug this same VM had already been fixed for** — `SELECT
+     recording_id, COUNT(*) FROM events GROUP BY recording_id HAVING COUNT(*) > 1`
+     turned up one `recording_id` with **535 TRIPWIRE_VIOLATION rows in roughly two
+     hours**, every one of them a genuinely-crossing-but-different `tracking_id`
+     (confirmed by inspecting `event_metadata->>'tracking_id'`: 8, 18, 31, 40, 50, 63,
+     72, 82, 95, 104, 114, 127, ... each appearing exactly once, each firing its own
+     ENTERING/EXITING pair roughly every 20-25 seconds). Root cause: `_check_tripwires`
+     had no debounce at all — unlike `LoiteringTracker`'s real "once per continuous
+     stay" gate for zones, every single frame where a tracked centroid crossed a
+     tripwire line fired a brand-new event, and `CentroidTracker` reassigning a fresh
+     `track_id` every time it briefly lost and re-acquired the same jittering object
+     (the identical root cause already fixed for plain detections — see limitation 23)
+     meant it never stopped. Fixed with `TRIPWIRE_VIOLATION_COOLDOWN_SECONDS` (30s,
+     keyed per-tripwire rather than per-track_id, since the whole point is that
+     track_id keeps changing for what's really one presence) — see limitation 24.
+     `ai-engine/tests/test_tripwire_violation_cooldown.py` reproduces the exact
+     "different track_id, same tripwire" shape found live.
+  3. **Definitively root-caused two specific enrolled people's still-missing photos**
+     (the user reported this had been asked for "several times") to real, permanent
+     data loss rather than a recurrence of the already-fixed relative-path bug:
+     `SELECT image_reference FROM face_profiles` on the live VM showed both rows still
+     storing the OLD relative path, and `find /data/faces -type f` inside the backend
+     container turned up only `.gitkeep` — both people were enrolled before `FACE_PATH`
+     was added to the VM's `.env`, so their photo files were written to the container's
+     ephemeral filesystem and never reached the persistent volume at all; no code
+     change can recover bytes that were never actually saved anywhere durable. Then,
+     to make sure the current code+environment combination genuinely works (rather than
+     asserting it does), enrolled a real throwaway test person with a real photo
+     directly against the live backend, confirmed the resulting `image_reference` was a
+     real absolute path that exists inside the container, fetched it back through
+     `GET /api/faces/{id}/photo` and confirmed the exact same JPEG bytes came back
+     (174,022 bytes, byte-for-byte), then deleted the test person. The two originally-
+     reported people need to be re-enrolled through the UI with a new photo — there is
+     nothing left to fix in code for them.
+  `cd backend && pytest -q` (215) and `cd ai-engine && pytest -q` (95) both green.

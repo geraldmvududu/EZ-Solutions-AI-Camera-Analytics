@@ -6,11 +6,12 @@ target) and to real AWS S3 in production by leaving S3_ENDPOINT_URL unset, which
 boto3 fall back to the real regional endpoint for AWS_REGION. Same code path either
 way — nothing here branches on which backend it's talking to.
 
-Deliberately duplicated byte-for-byte at ai-engine/app/core/object_storage.py, the
-same pattern already established for face_embedding.py: ai-engine is the process that
-actually creates snapshot/recording/evidence-clip files and needs to upload them, while
-the backend only ever reads them back out (via presigned URLs) — there's no shared-
-package infrastructure in this monorepo to import one copy from the other.
+Deliberately duplicated byte-for-byte at ai-engine/app/core/object_storage.py (except
+download_object, see its own docstring), the same pattern already established for
+face_embedding.py: ai-engine is the process that actually creates snapshot/recording/
+evidence-clip files and needs to upload them, while the backend only ever reads them
+back out (via presigned URLs) — there's no shared-package infrastructure in this
+monorepo to import one copy from the other.
 
 Real bug class this avoids: never construct a boto3 client at import time using
 module-level settings, since tests and any process that never touches storage
@@ -106,6 +107,17 @@ def delete_object(key: str) -> None:
     """Used by the retention worker once a cloud-stored artifact's retention window
     expires. Deleting a key that doesn't exist is not an error (S3's own semantics)."""
     _get_client().delete_object(Bucket=_bucket(), Key=key)
+
+
+def download_object(key: str) -> bytes:
+    """Downloads an object's raw bytes. Every other read path in this platform (the
+    snapshot/recording/evidence-clip serving endpoints) redirects the browser to a
+    presigned URL instead — but the per-event PDF export (app/services/report_service.py)
+    needs the actual bytes server-side to embed the image in the generated PDF, where
+    there's no browser to follow a redirect. Backend-only: unlike every other function
+    in this module, this is NOT duplicated to ai-engine/app/core/object_storage.py —
+    ai-engine only ever uploads objects it just created, it never needs to read one back."""
+    return _get_client().get_object(Bucket=_bucket(), Key=key)["Body"].read()
 
 
 def ensure_bucket_exists() -> None:

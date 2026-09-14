@@ -67,6 +67,20 @@ CONTINUOUS_SEGMENT_SECONDS = 300
 # CLAUDE.md's "do not hallucinate accuracy we don't have" convention.
 OBJECT_EVENT_COOLDOWN_SECONDS = 30
 
+# Real bug found live on the deployed VM: one camera produced 535 TRIPWIRE_VIOLATION
+# events in ~2 hours, all attached to the SAME recording_id (i.e. reported as 535
+# separate "videos" for what was really one continuous scene) — a tracked object
+# jittering right at the tripwire line crosses it, CentroidTracker loses and
+# re-acquires it under a brand-new track_id every ~10-25s (the same track-churn root
+# cause OBJECT_EVENT_COOLDOWN_SECONDS already fixes for plain detections), and
+# _check_tripwires had NO debounce at all — unlike LoiteringTracker's "once per
+# continuous stay" gate, every crossing by every fresh track_id fired its own event.
+# One cooldown per tripwire (not per track_id, since the whole point is that track_id
+# keeps changing for what's really the same presence) — same accepted trade-off as
+# OBJECT_EVENT_COOLDOWN_SECONDS: two genuinely different people crossing the same
+# tripwire within the window means only the first is reported.
+TRIPWIRE_VIOLATION_COOLDOWN_SECONDS = 30
+
 
 class CameraWorker:
     def __init__(self, camera: dict, zones: list[dict], tripwires: list[dict]) -> None:
@@ -98,6 +112,7 @@ class CameraWorker:
 
         self._last_heartbeat = 0.0
         self._last_object_event_sent = 0.0
+        self._last_tripwire_violation_sent: dict[str, float] = {}
         self._last_motion_time = 0.0
         self._last_detection_time = 0.0
         self._segment_started_at = 0.0
@@ -288,6 +303,12 @@ class CameraWorker:
             configured_direction = tripwire.get("direction", "BOTH")
             if configured_direction != "BOTH" and configured_direction != direction:
                 continue
+
+            now = time.time()
+            last_sent = self._last_tripwire_violation_sent.get(tripwire["id"], 0.0)
+            if now - last_sent < TRIPWIRE_VIOLATION_COOLDOWN_SECONDS:
+                continue
+            self._last_tripwire_violation_sent[tripwire["id"]] = now
 
             snapshot_id = self._save_and_report_snapshot(frame, None)
             backend_client.create_event(

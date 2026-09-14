@@ -10,7 +10,8 @@ from datetime import datetime, timezone
 from reportlab.lib import colors
 from reportlab.lib.pagesizes import letter
 from reportlab.lib.units import inch
-from reportlab.platypus import Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
+from reportlab.lib.utils import ImageReader
+from reportlab.platypus import Image as RLImage, Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
 from reportlab.lib.styles import getSampleStyleSheet
 from sqlalchemy.orm import Session
 
@@ -133,12 +134,21 @@ def build_security_report_pdf(
     return buffer.getvalue()
 
 
-def build_event_detail_pdf(event: Event, camera_name: str) -> bytes:
+def build_event_detail_pdf(event: Event, camera_name: str, snapshot_image_bytes: bytes | None = None) -> bytes:
     """A single event's full detail as a standalone PDF (section: per-event export) —
     the same fields the Events page's detail modal already shows (type/severity/
-    category/review status/description/raw metadata), not a second, differently-worded
-    summary of it. No prose "explanation" here — that's presentation-layer text
-    (frontend's explainEvent.ts); this is the underlying real data it's built from."""
+    category/review status/description/raw metadata/snapshot image), not a second,
+    differently-worded summary of it. No prose "explanation" here — that's presentation-
+    layer text (frontend's explainEvent.ts); this is the underlying real data it's
+    built from.
+
+    snapshot_image_bytes is the caller's job to fetch (app/api/routes/reports.py reads
+    it from local disk or, for a cloud-uploaded snapshot, via
+    object_storage.download_object — see that route for why a presigned-redirect,
+    the pattern every other snapshot-serving endpoint uses, doesn't work here: there's
+    no browser on this end to follow it). None (no snapshot on the event, or the file/
+    object couldn't be read) renders a plain "not available" line instead of silently
+    omitting the section."""
     buffer = io.BytesIO()
     doc = SimpleDocTemplate(buffer, pagesize=letter, topMargin=0.75 * inch, bottomMargin=0.75 * inch)
     styles = getSampleStyleSheet()
@@ -147,6 +157,20 @@ def build_event_detail_pdf(event: Event, camera_name: str) -> bytes:
     story.append(Paragraph("EZ Solutions AI Camera Analytics — Event Report", styles["Title"]))
     story.append(Paragraph(event.event_type.value.replace("_", " ").title(), styles["Normal"]))
     story.append(Paragraph(f"Generated: {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M')} UTC", styles["Normal"]))
+    story.append(Spacer(1, 16))
+
+    story.append(Paragraph("Event Snapshot", styles["Heading2"]))
+    if snapshot_image_bytes:
+        # ImageReader just to measure the real dimensions for aspect-ratio scaling —
+        # the Image flowable itself needs its OWN, unconsumed file-like object (it
+        # checks hasattr(x, "read"), which ImageReader doesn't satisfy, so passing the
+        # same reader here raises a TypeError deep in reportlab's own __init__).
+        img_width, img_height = ImageReader(io.BytesIO(snapshot_image_bytes)).getSize()
+        max_width, max_height = 4.5 * inch, 3.375 * inch
+        scale = min(max_width / img_width, max_height / img_height, 1.0)
+        story.append(RLImage(io.BytesIO(snapshot_image_bytes), width=img_width * scale, height=img_height * scale))
+    else:
+        story.append(Paragraph("No snapshot image is available for this event.", styles["Normal"]))
     story.append(Spacer(1, 16))
 
     def table(rows: list[list[str]]) -> None:

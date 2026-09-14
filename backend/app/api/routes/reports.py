@@ -1,3 +1,5 @@
+import logging
+import os
 import uuid
 from datetime import datetime, timedelta, timezone
 
@@ -11,13 +13,36 @@ from app.database import get_db
 from app.models.alert import Alert
 from app.models.event import Event
 from app.models.face_recognition_event import FaceRecognitionEvent
+from app.models.snapshot import Snapshot
 from app.models.tenant import Tenant
 from app.models.user import User
 from app.models.camera import Camera
+from app.services import object_storage
 from app.services.analytics_service import get_analytics_summary, get_face_recognition_report_data, get_incident_type_report_data
 from app.services.report_service import alerts_to_csv, build_event_detail_pdf, build_security_report_pdf, events_to_csv, face_appearances_to_csv
 
+logger = logging.getLogger("reports")
+
 router = APIRouter(prefix="/reports", tags=["reports"])
+
+
+def _load_snapshot_image_bytes(snapshot: Snapshot | None) -> bytes | None:
+    """Best-effort — a missing/unreadable image must not break the PDF export (the
+    caller still has real event data worth a report), it just renders without the
+    picture. Mirrors GET /snapshots/{id}/image's storage_key-vs-local-file branch, but
+    returns real bytes to embed server-side instead of a redirect, since there's no
+    browser here to follow one (see object_storage.download_object's own docstring)."""
+    if snapshot is None:
+        return None
+    try:
+        if snapshot.storage_key:
+            return object_storage.download_object(snapshot.storage_key)
+        if os.path.isfile(snapshot.file_path):
+            with open(snapshot.file_path, "rb") as f:
+                return f.read()
+    except Exception:
+        logger.exception("Failed to load snapshot %s for event PDF export", snapshot.id)
+    return None
 
 
 def _apply_range(query, model, start: datetime | None, end: datetime | None, date_field: str):
@@ -110,7 +135,9 @@ def export_event_detail_pdf(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Event not found")
 
     camera = db.get(Camera, event.camera_id)
-    pdf_bytes = build_event_detail_pdf(event, camera.name if camera else "Unknown camera")
+    snapshot = db.get(Snapshot, event.snapshot_id) if event.snapshot_id else None
+    snapshot_image_bytes = _load_snapshot_image_bytes(snapshot)
+    pdf_bytes = build_event_detail_pdf(event, camera.name if camera else "Unknown camera", snapshot_image_bytes=snapshot_image_bytes)
     return Response(
         content=pdf_bytes,
         media_type="application/pdf",

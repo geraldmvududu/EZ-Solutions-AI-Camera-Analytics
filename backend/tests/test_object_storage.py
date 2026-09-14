@@ -20,6 +20,7 @@ from app.services import object_storage
 _real_upload_file = object_storage.upload_file
 _real_delete_object = object_storage.delete_object
 _real_generate_presigned_url = object_storage.generate_presigned_url
+_real_download_object = object_storage.download_object
 
 
 @pytest.fixture(autouse=True)
@@ -45,6 +46,15 @@ class _FakeBotoClient:
     def generate_presigned_url(self, operation, Params, ExpiresIn):
         self.calls.append(("generate_presigned_url", operation, Params, ExpiresIn))
         return f"https://fake-presigned.example/{Params['Bucket']}/{Params['Key']}?expires={ExpiresIn}"
+
+    def get_object(self, Bucket, Key):
+        self.calls.append(("get_object", Bucket, Key))
+
+        class _Body:
+            def read(self_inner):
+                return b"fake-object-bytes"
+
+        return {"Body": _Body()}
 
     def head_bucket(self, Bucket):
         raise Exception("bucket does not exist")
@@ -178,6 +188,34 @@ def test_delete_object_targets_configured_bucket(monkeypatch):
 
     client = capture["clients"][0]
     assert client.calls == [("delete_object", object_storage._bucket(), "tenant-1/site-1/camera-1/snapshots/old.jpg")]
+
+
+def test_download_object_returns_the_real_body_bytes(monkeypatch):
+    capture: dict = {}
+    _patch_boto_client(monkeypatch, capture)
+
+    result = _real_download_object("tenant-1/site-1/camera-1/snapshots/photo.jpg")
+
+    client = capture["clients"][0]
+    assert result == b"fake-object-bytes"
+    assert client.calls == [("get_object", object_storage._bucket(), "tenant-1/site-1/camera-1/snapshots/photo.jpg")]
+
+
+def test_download_object_uses_the_internal_client_not_the_presign_client(monkeypatch):
+    """download_object reads the actual bytes server-side (for the per-event PDF
+    export) — it has no reason to go through the browser-facing presign client."""
+    from app.config import get_settings
+
+    get_settings.cache_clear()
+    monkeypatch.setenv("S3_ENDPOINT_URL", "http://minio:9000")
+    monkeypatch.setenv("S3_PUBLIC_ENDPOINT_URL", "http://localhost:9000")
+    capture: dict = {}
+    _patch_boto_client(monkeypatch, capture)
+
+    _real_download_object("tenant-1/site-1/camera-1/snapshots/photo.jpg")
+
+    assert capture["kwargs"]["endpoint_url"] == "http://minio:9000"
+    get_settings.cache_clear()
 
 
 def test_generate_presigned_url_uses_the_presign_client(monkeypatch):
