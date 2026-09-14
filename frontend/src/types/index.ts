@@ -44,6 +44,7 @@ export interface Camera {
   cloud_recording_enabled: boolean;
   current_occupancy: number;
   max_occupancy: number | null;
+  plate_recognition_enabled: boolean;
   status: CameraStatus;
   is_active: boolean;
   is_demo: boolean;
@@ -99,7 +100,10 @@ export type EventType =
   | "TAILGATING_DETECTED"
   | "RESTRICTED_AREA_VIOLATION"
   | "POTENTIAL_THEFT_DETECTED"
-  | "CAMERA_OBSTRUCTED";
+  | "CAMERA_OBSTRUCTED"
+  | "MAXIMUM_OCCUPANCY_EXCEEDED"
+  | "LICENSE_PLATE_DETECTED"
+  | "VEHICLE_WATCHLIST_MATCH";
 
 export type EventReviewStatus = "UNREVIEWED" | "REVIEWED";
 export type EventCategory = "SECURITY" | "PEOPLE" | "VEHICLES" | "SAFETY" | "OPERATIONS";

@@ -37,6 +37,7 @@ function CameraFormModal({
   const [faceHoursStart, setFaceHoursStart] = useState(camera?.face_operating_hours_start ?? "");
   const [faceHoursEnd, setFaceHoursEnd] = useState(camera?.face_operating_hours_end ?? "");
   const [multiClassDetectionEnabled, setMultiClassDetectionEnabled] = useState(camera?.multi_class_detection_enabled ?? false);
+  const [plateRecognitionEnabled, setPlateRecognitionEnabled] = useState(camera?.plate_recognition_enabled ?? false);
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const [uploading, setUploading] = useState(false);
@@ -77,6 +78,7 @@ function CameraFormModal({
         face_operating_hours_start: faceHoursStart || undefined,
         face_operating_hours_end: faceHoursEnd || undefined,
         multi_class_detection_enabled: multiClassDetectionEnabled,
+        plate_recognition_enabled: plateRecognitionEnabled,
       };
       if (isEdit && camera) {
         await camerasApi.updateCamera(camera.id, payload);
@@ -258,6 +260,18 @@ function CameraFormModal({
           </p>
         </div>
 
+        <div className="border-t border-base-700 pt-3">
+          <label className="flex items-center gap-2 text-sm text-slate-300">
+            <input type="checkbox" checked={plateRecognitionEnabled} onChange={(e) => setPlateRecognitionEnabled(e.target.checked)} />
+            License Plate Recognition (ANPR)
+          </label>
+          <p className="text-xs text-slate-500 mt-1">
+            Real OCR read against a Haar-cascade-detected plate region — not a certified ANPR system, accuracy
+            varies with angle/lighting/plate format. Requires "Multi-class object detection" above (only it can see
+            vehicles at all). Manage matched plates on the Vehicle Watchlist page.
+          </p>
+        </div>
+
         <div className="flex justify-end gap-2 pt-2">
           <button type="button" onClick={onClose} className="px-3 py-1.5 text-sm rounded border border-base-600 text-slate-300">
             Cancel
@@ -350,6 +364,7 @@ export function CamerasPage() {
               <th className="text-left px-4 py-2">Recording</th>
               <th className="text-left px-4 py-2">Face Rec.</th>
               <th className="text-left px-4 py-2">Multi-class</th>
+              <th className="text-left px-4 py-2">Plate Rec.</th>
               <th className="text-left px-4 py-2">Actions</th>
             </tr>
           </thead>
@@ -369,6 +384,7 @@ export function CamerasPage() {
                 <td className="px-4 py-2 text-slate-400">{cam.recording_enabled ? "ON" : "OFF"}</td>
                 <td className="px-4 py-2 text-slate-400">{cam.face_recognition_enabled ? "ON" : "OFF"}</td>
                 <td className="px-4 py-2 text-slate-400">{cam.multi_class_detection_enabled ? "ON" : "OFF"}</td>
+                <td className="px-4 py-2 text-slate-400">{cam.plate_recognition_enabled ? "ON" : "OFF"}</td>
                 <td className="px-4 py-2">
                   <div className="flex items-center gap-3">
                     <button onClick={() => handleTest(cam.id)} className="text-accent-500 hover:underline text-xs">
@@ -387,7 +403,7 @@ export function CamerasPage() {
             ))}
             {cameras.length === 0 && (
               <tr>
-                <td colSpan={10} className="px-4 py-8 text-center text-slate-500">
+                <td colSpan={11} className="px-4 py-8 text-center text-slate-500">
                   No cameras yet. Add one to get started.
                 </td>
               </tr>

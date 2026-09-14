@@ -111,6 +111,13 @@ class BackendClient:
         recording/detection pipeline (spec section 19)."""
         return self._safe_post("/api/faces/recognize", payload)
 
+    def recognize_plate(self, payload: dict) -> dict | None:
+        """Sends one real, already-regex-sanity-checked plate read for server-side
+        watchlist matching (Master Development Prompt Phase 1, "License Plate Reading").
+        Like every other call here, a failure is swallowed by _safe_post and logged — an
+        ANPR outage must never stop the camera's recording/detection pipeline."""
+        return self._safe_post("/api/vehicles/recognize-plate", payload)
+
     def _safe_post(self, path: str, payload: dict) -> dict | None:
         try:
             resp = self._client.post(path, json=payload)

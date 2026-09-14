@@ -161,6 +161,7 @@ def create_camera(
         site_id=payload.site_id,
         cloud_recording_enabled=payload.cloud_recording_enabled,
         max_occupancy=payload.max_occupancy,
+        plate_recognition_enabled=payload.plate_recognition_enabled,
     )
     db.add(camera)
     db.commit()

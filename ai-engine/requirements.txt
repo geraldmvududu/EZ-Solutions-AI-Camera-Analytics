@@ -30,3 +30,9 @@ boto3==1.35.90
 --extra-index-url https://download.pytorch.org/whl/cpu
 torch==2.5.1
 ultralytics==8.4.150
+# Master Development Prompt Phase 1, "License Plate Reading (ANPR)" — a real, unmocked
+# OCR pass (see app/core/plate_reader.py) against a Haar-cascade-detected plate region.
+# Needs the system tesseract-ocr binary on PATH (installed via apt in the Dockerfile;
+# on Windows dev, `winget install --id tesseract-ocr.tesseract` — confirmed working
+# end-to-end: rendered text into a synthetic image, tesseract read it back exactly).
+pytesseract==0.3.13

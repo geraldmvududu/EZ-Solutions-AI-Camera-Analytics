@@ -841,6 +841,75 @@ codebase before this.
   vertically (or the shape's motion changed), and genuine testing needs a real
   VIDEO_FILE/RTSP camera showing people actually entering/exiting.
 
+**Master Development Prompt Phase 1 — License Plate Reading (ANPR)**
+(`ai-engine/app/core/plate_reader.py`, `backend/app/api/routes/vehicles.py`): the
+fourth and final sub-phase. Real gap found by direct code read: zero ANPR code existed
+anywhere in this codebase before this — `CLAUDE.md` had documented it as explicitly
+out of scope.
+
+- Staged, cheapest-first, matching this project's own "verify before escalating"
+  discipline (the same one that tuned the gate-jump threshold from real logged data
+  rather than guessing): Stage A uses OpenCV's bundled Haar cascade
+  (`haarcascade_russian_plate_number.xml`) for the plate-region bounding box — the same
+  "no downloaded model weights" precedent already used for face detection — running on
+  already-tracked CAR/TRUCK/BUS/MOTORCYCLE detections (needs
+  `Camera.multi_class_detection_enabled`, same indirect-gating relationship theft
+  detection already has with that flag, since the default HOG detector never emits
+  vehicle-class detections at all). **Honest, disclosed limit**: this cascade is
+  Russian-plate-trained — real accuracy against other plate formats (including South
+  African plates) is unverified and may be poor. Ship it, measure real accuracy against
+  real footage, and only then decide whether a downloaded general-purpose
+  plate-detection model is worth the investment — not pre-committed to here.
+- OCR itself is real and unmocked: `pytesseract` (new dependency, `ai-engine/
+  requirements.txt`) shells out to the real system `tesseract-ocr` binary (added to
+  `ai-engine/Dockerfile`'s apt install list, same pattern as `ffmpeg`). Verified for
+  real on this Windows dev machine (`winget install --id tesseract-ocr.tesseract`, the
+  same real-binary-on-Windows-dev-machine precedent already used for `ffmpeg`):
+  rendered known text into a synthetic image and confirmed Tesseract read it back
+  exactly. A plain regex sanity check (`plate_reader.py::clean_plate_text` — 4-10
+  alphanumeric characters after stripping whitespace/punctuation) rejects obvious OCR
+  garbage before a read is ever treated as real — a coarse plausibility check, not a
+  country-specific plate-format validator, since formats vary too much to hard-code.
+- `PlateReader` mirrors `FaceRecognizer`'s structure exactly: per-track cooldown
+  (default 30s), an exception-safe `maybe_read_plate` wrapper so an ANPR bug can never
+  stop the camera's capture loop. Simplification versus the original plan: no dedicated
+  license-plate zone type was added (unlike face recognition's FACE_DETECTION/
+  FACE_EXCLUSION zones) — the camera-level `plate_recognition_enabled` opt-in plus the
+  existing `multi_class_detection_enabled` gate were judged sufficient control surface
+  for this pass, keeping the already-large scope of this final sub-phase tighter.
+- Backend mirrors `faces.py`'s enrollment/recognition split: `VehicleWatchlist`
+  (plate + `AUTHORIZED`/`UNAUTHORIZED`/`WATCHLIST`/`BLACKLISTED` status, mirrors
+  `Person`'s category/status role) is tenant-managed via new `manage_vehicle_watchlist`/
+  `view_vehicle_events` permissions (mirroring `manage_biometrics`/
+  `view_biometric_events` exactly, including the operator-can-view-but-not-manage
+  split). `LicensePlate` (one row per real read, mirrors `FaceRecognitionEvent`) links
+  1:1 to a generic `Event` row so it rides the existing rule-engine/alert/WebSocket/
+  notification pipeline with zero duplicate plumbing. `POST /vehicles/recognize-plate`
+  always creates a plain `LICENSE_PLATE_DETECTED` sighting log entry (supporting the
+  master prompt's own worked example — "show all events involving registration X
+  during the last 30 days," via `GET /vehicles/plate-events?plate_text=`) regardless of
+  watchlist status, and additionally creates `VEHICLE_WATCHLIST_MATCH` — registered in
+  `violation_service.py`'s `_ALWAYS_INCIDENT_EVENT_TYPES` with zero new dispatch code,
+  same as theft detection — only when the plate matches an ACTIVE `VehicleWatchlist`
+  row marked `WATCHLIST` (→ HIGH severity incident) or `BLACKLISTED` (→ CRITICAL).
+  `AUTHORIZED`/`UNAUTHORIZED` matches are logged but never incident-worthy.
+- Real bug caught by this feature's own new tests before it ever ran live: plate text
+  was normalized inconsistently — `VehicleWatchlist` creation only did
+  `.strip().upper()` while `plate_reader.py`'s real OCR path strips ALL non-alphanumeric
+  characters (spaces, dashes) — so a watchlist entry an admin naturally typed as
+  "CA 123-456" would never have matched a real sighting of "CA123456". Fixed by
+  normalizing identically (strip non-alphanumeric + uppercase) on both the watchlist
+  and the recognize-plate paths, confirmed by a real end-to-end test posting a
+  differently-formatted plate read against a normalized watchlist entry.
+- Frontend: `Cameras.tsx` gained a "License Plate Recognition (ANPR)" toggle (with an
+  inline accuracy-caveat note) and a "Plate Rec." table column; new
+  `pages/vehicles/VehicleWatchlist.tsx` (CRUD, mirrors `EnrolledPeople.tsx`) and
+  `pages/vehicles/PlateRecognitionEvents.tsx` (searchable sighting log with recording
+  playback, mirrors `RecognitionEvents.tsx`) plus sidebar entries and `explainEvent.ts`
+  cases for `LICENSE_PLATE_DETECTED`/`VEHICLE_WATCHLIST_MATCH` (and the previously-
+  missed `MAXIMUM_OCCUPANCY_EXCEEDED` from the occupancy-counting sub-phase, added
+  alongside these while touching the same file).
+
 ## Development commands
 
 ```bash
@@ -863,7 +932,7 @@ cd ai-engine && python -m app.main
 ## Testing commands
 
 ```bash
-cd backend && pytest -q      # 253 tests: auth, RBAC, tenant isolation, camera CRUD
+cd backend && pytest -q      # 265 tests: auth, RBAC, tenant isolation, camera CRUD
                               # (including the delete cascade covering every dependent
                               # table), credential encryption, rule engine, analytics
                               # aggregates, report export, the Redis-backed rate limiter
@@ -977,8 +1046,22 @@ cd backend && pytest -q      # 253 tests: auth, RBAC, tenant isolation, camera C
                               # over, no max_occupancy configured never fires at all,
                               # dropping back under and exceeding again correctly
                               # refires, and max_occupancy is real admin-settable/
-                              # returned camera state)
-cd ai-engine && pytest -q    # 129 tests: centroid tracker (including type-aware
+                              # returned camera state), VehicleWatchlist CRUD + tenant
+                              # isolation (Master Development Prompt Phase 1 — mirrors
+                              # test_faces.py/test_face_tenant_isolation.py's own
+                              # conventions, plus plate-text normalization at creation
+                              # time), and plate recognition (an unknown plate creates
+                              # only a plain LICENSE_PLATE_DETECTED sighting and no
+                              # incident, a BLACKLISTED match creates a CRITICAL
+                              # incident and a WATCHLIST match a HIGH one, an
+                              # AUTHORIZED match creates no incident, an inactive
+                              # watchlist entry is never matched, the internal-token
+                              # gate is enforced, tenant isolation of plate sightings,
+                              # and — the real bug this test suite itself caught before
+                              # it ever ran live — a differently-formatted plate read
+                              # ("ca 123-456") correctly matches a normalized watchlist
+                              # entry ("CA123456"))
+cd ai-engine && pytest -q    # 137 tests: centroid tracker (including type-aware
                               # matching so a multi-class detector can't let a track
                               # of one object_type steal another's), zone/tripwire
                               # geometry, loitering timer, motion detection (real MOG2 background
@@ -1070,7 +1153,18 @@ cd ai-engine && pytest -q    # 129 tests: centroid tracker (including type-aware
                               # unrelated TRIPWIRE_VIOLATION cooldown, a disabled
                               # tripwire never reports, and a real queue of several
                               # different tracked people within the cooldown window are
-                              # all still counted, none silently dropped)
+                              # all still counted, none silently dropped), and
+                              # PlateReader (Master Development Prompt Phase 1 — a
+                              # plausible OCR read is cleaned/accepted, obvious OCR
+                              # garbage is rejected, no plate region found never calls
+                              # recognize, a valid read reports the correct payload, a
+                              # second attempt within the cooldown window is
+                              # suppressed, the cooldown is scoped per track not
+                              # global, and a recognition bug never propagates out of
+                              # maybe_read_plate — pytesseract/the Haar cascade mocked
+                              # at the boundary, the real unmocked pipeline separately
+                              # confirmed working by hand: rendered text into a
+                              # synthetic image and Tesseract read it back exactly)
 cd worker && pytest -q       # 25 tests: retention cleanup for recordings/snapshots/
                               # face-recognition-events/face-profiles against a real
                               # SQLite DB with a hand-crafted minimal schema (the
@@ -1209,8 +1303,9 @@ narrowly-scoped IAM key in production — never reuse a broader-privileged crede
    percentage — there's no periodic status-history table yet, only point-in-time
    heartbeats.
 7. **Facial recognition**: implemented (see the Architecture section above and
-   limitations 12/13 below) — **ANPR/license-plate recognition is not** (out of scope
-   for this pass).
+   limitations 12/13 below). **ANPR/license-plate recognition is now also implemented**
+   (Master Development Prompt Phase 1, sub-phase 4) — see the Architecture section and
+   limitation 31 for its real, disclosed Russian-cascade accuracy caveat.
 8. **Push notification delivery** was verified up to the point of a real HTTP call to
    Expo's push API with a correctly-shaped payload (mocked in tests, since there's no
    real device/token in this environment to receive an actual push) — see
@@ -1529,6 +1624,24 @@ narrowly-scoped IAM key in production — never reuse a broader-privileged crede
    illumination, looks like. This heuristic cannot tell those two apart — every
    `CAMERA_OBSTRUCTED` event needs human review, the same way every AI Video Intelligence
    incident type already does, and must never be treated as confirmed proof of tampering.
+31. **License Plate Reading (ANPR, Master Development Prompt Phase 1) is a real,
+   staged, Stage-A implementation — not a certified/commercial ANPR system.** The
+   plate-region detector is OpenCV's bundled `haarcascade_russian_plate_number.xml`
+   (zero extra download, same precedent as face detection's Haar cascade), which is
+   Russian-plate-trained — real accuracy against other plate formats (South African
+   plates included) is genuinely unverified and may be poor. This was a deliberate,
+   disclosed choice: ship the free option first, measure real accuracy against real
+   footage once deployed (the same discipline that tuned the gate-jump threshold from
+   real logged data rather than guessing), and only then decide whether a downloaded
+   general-purpose plate-detection model is worth the investment. The OCR step itself
+   (real Tesseract, via `pytesseract`) is not the weak link — confirmed for real that it
+   correctly reads clear, well-lit text; the plate-region detection stage is what
+   real-world accuracy will hinge on. Also disclosed: no dedicated license-plate zone
+   type exists (unlike face recognition's FACE_DETECTION/FACE_EXCLUSION) — control is
+   camera-level only (`plate_recognition_enabled` + `multi_class_detection_enabled`);
+   and the coarse plate-text sanity regex (4-10 alphanumeric characters) is not a
+   country-specific format validator, so an implausible-but-technically-4-10-character
+   OCR misread could still pass through as a "real" plate in rare cases.
 
 ## Current implementation status
 
@@ -1546,7 +1659,7 @@ narrowly-scoped IAM key in production — never reuse a broader-privileged crede
 | 10. Facial Recognition & Identity Analytics | Phase 1 + Phase 2 done, tested, verified in a real browser — enroll/manage people, real detect→embed→match pipeline, recognition events feeding the existing event/alert/rule/notification/WebSocket pipeline, camera + zone config, human review, identified-person violation → auto-Incident, recordings linked to face/violation events with in-browser seekable playback, multi-frame confirmation, liveness (narrow scope, limitation 12), retention enforcement, and a CSV appearance-history export. Full drag-and-drop rules-builder UI is still out of scope (rules are managed via the existing generic Rules page) |
 | 11. AI Video Intelligence | Phase 1 + Phase 2 done, tested, verified in a real browser — gate-jumping/climbing (heuristic), tailgating, restricted-area, and now potential-theft detection (real YOLOv8n multi-class detector, opt-in per camera; backpack/handbag/suitcase removal from a monitored zone) extending the existing tripwire/zone pipeline; a real, transparent risk score; auto-created Incidents with a template-based (not LLM) AI summary; real ffmpeg-trimmed evidence clips; a dashboard and settings page; a PDF report section. Abandoned-object detection (not requested) and fall detection (Phase 3, needs pose estimation) are deliberately not built yet — see limitations 17-19 |
 | 12. Event-First Cloud Storage | Phase 1 done, tested — Site hierarchy (Customer → Site → Camera), a real object-storage abstraction (MinIO in dev / real AWS S3 in production, same code path) with presigned-URL serving, configurable per-tenant retention tiers with worker-side enforcement, per-event review/notes/categorization with real filter UI on Events/Alerts, a storage-usage dashboard, and a new SECURITY_MANAGER role. See limitations 20-22 for the explicit out-of-scope list (multi-channel alerts, offline edge queue-and-sync, generalized dedup/cooldown config, per-user site-level RBAC, S3 lifecycle policies, AWS Cost Explorer billing) |
-| 13. Master Development Prompt Phase 1 | Sub-phases 1-3 done, tested, verified live: Camera & System Health (real auto-offline detection, the OFFLINE→ONLINE transition event, a disclosed lens-obstruction heuristic), Multi-event Incident Correlation (merging related violation events for the same tracked person/object into one growing incident instead of several), and Crowd/Occupancy Counting (real per-tripwire entry/exit counting independent of violation cooldowns, a configurable max-occupancy alert, a live dashboard panel). Sub-phase 4 (license plate reading/ANPR) in progress. Weapons, fire/smoke, PPE, fight/violence, and fall detection deliberately skipped — no trained model this environment can obtain/verify exists for any of them, and the user chose honesty over a feature that looks reliable but isn't for safety-critical categories |
+| 13. Master Development Prompt Phase 1 | All 4 sub-phases done, tested, verified live: Camera & System Health (real auto-offline detection, the OFFLINE→ONLINE transition event, a disclosed lens-obstruction heuristic), Multi-event Incident Correlation (merging related violation events for the same tracked person/object into one growing incident instead of several), Crowd/Occupancy Counting (real per-tripwire entry/exit counting independent of violation cooldowns, a configurable max-occupancy alert, a live dashboard panel), and License Plate Reading/ANPR (real Haar-cascade plate detection + unmocked Tesseract OCR, a tenant-managed vehicle watchlist, real-time watchlist-match → auto-Incident, a searchable plate-sighting log). See limitation 31 for ANPR's disclosed Russian-cascade accuracy caveat. Weapons, fire/smoke, PPE, fight/violence, and fall detection deliberately skipped — no trained model this environment can obtain/verify exists for any of them, and the user chose honesty over a feature that looks reliable but isn't for safety-critical categories |
 
 ## Verified end-to-end (not just "should work")
 
@@ -2056,3 +2169,30 @@ narrowly-scoped IAM key in production — never reuse a broader-privileged crede
   over-limit color. Reset the camera's occupancy/max_occupancy and the tripwire's
   opt-in back to their pre-test state afterward. `cd backend && pytest -q` (253),
   `cd ai-engine && pytest -q` (129), and `cd frontend && npm run build` all green.
+- **Master Development Prompt Phase 1 — License Plate Reading (ANPR), end-to-end with
+  a genuinely unmocked OCR pipeline (not just mocked unit tests).** First, installed the
+  real `tesseract-ocr` binary on this Windows dev machine (`winget install --id
+  tesseract-ocr.tesseract`, the same real-binary-on-Windows precedent already used for
+  `ffmpeg`) and `pytesseract` into the ai-engine venv, then confirmed genuine OCR end to
+  end with zero mocking: rendered the literal text "ABC1234" into a synthetic image with
+  `cv2.putText` and confirmed `pytesseract.image_to_string` read it back byte-for-byte
+  correctly. Then, against the real running local dev backend: created a real
+  `VehicleWatchlist` entry through the actual API with intentionally "messy" human
+  formatting ("jz 12-34 gp", status `BLACKLISTED`) and confirmed it was stored correctly
+  normalized (`JZ1234GP`). Posted a real plate recognition through the actual
+  `POST /vehicles/recognize-plate` internal endpoint (as ai-engine's `plate_reader.py`
+  would after a real Haar-cascade + OCR pass) using a DIFFERENTLY-formatted read of the
+  same plate ("jz-1234-gp") and confirmed in the real browser: the watchlist correctly
+  matched despite the formatting difference, a real Incident auto-created with the exact
+  expected values (title "Vehicle Watchlist Match — Unknown Person at Main Gate",
+  `CRITICAL` severity, risk score 60/100 matching `compute_risk_score` by hand — 40 for
+  CRITICAL + 20 after-hours — confidence 83% echoing the posted value, `requires_human_
+  review: true`), and the new Plate Recognition Events page showed the real sighting
+  with a "Match" badge. This exact test — differently-formatted watchlist entry vs.
+  differently-formatted plate read — is what caught the plate-text-normalization bug
+  documented above; without it, this specific mismatch would have shipped silently
+  broken. Cleaned up the test watchlist entry afterward (left the real Incident/Event
+  records in place as history, matching this session's own established convention).
+  `cd backend && pytest -q` (265), `cd ai-engine && pytest -q` (137), and
+  `cd frontend && npm run build` all green — closing out all 4 sub-phases of the Master
+  Development Prompt's first phase.

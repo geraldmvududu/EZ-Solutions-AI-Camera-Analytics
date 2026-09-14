@@ -20,6 +20,7 @@ from app.config import get_settings
 from app.core.camera_health import CameraObstructionTracker
 from app.core.motion import MotionDetector
 from app.core.object_tracking import AssetZoneTracker
+from app.core.plate_reader import PlateReader
 from app.core.overlay import draw_overlay
 from app.core.privacy import apply_privacy_masks
 from app.core.face_recognizer import FaceRecognizer
@@ -43,6 +44,9 @@ logger = logging.getLogger("ai-engine.worker")
 settings = get_settings()
 
 VEHICLE_TYPES = {"CAR", "TRUCK", "BUS", "MOTORCYCLE", "BICYCLE"}
+# Master Development Prompt Phase 1, "License Plate Reading (ANPR)" — excludes BICYCLE
+# (no plate to read).
+PLATE_READABLE_VEHICLE_TYPES = {"CAR", "TRUCK", "BUS", "MOTORCYCLE"}
 # AI Video Intelligence Phase 2 (section 6) — the only COCO classes YOLOv8n gives us
 # that represent an "ownable item" someone could remove from a monitored area. See
 # yolo_detector.py's module docstring for the honest scope limit (no generic
@@ -106,6 +110,7 @@ class CameraWorker:
         self._privacy_zones = [z for z in self.zones if z["zone_type"] == "PRIVACY"]
         self._face_zones = [z for z in self.zones if z["zone_type"] in ("FACE_DETECTION", "FACE_EXCLUSION")]
         self._face_recognizer = FaceRecognizer(self.camera_id) if camera.get("face_recognition_enabled") else None
+        self._plate_reader = PlateReader(self.camera_id) if camera.get("plate_recognition_enabled") else None
 
         self._stop_event = threading.Event()
         self._thread = threading.Thread(target=self._run, daemon=True, name=f"camera-{camera['camera_code']}")
@@ -314,6 +319,9 @@ class CameraWorker:
                 self._face_recognizer.maybe_recognize(
                     self.camera, frame, track_id, detection, centroid, self._face_zones, self._recorder.recording_id
                 )
+
+            if self._plate_reader and detection.object_type in PLATE_READABLE_VEHICLE_TYPES:
+                self._plate_reader.maybe_read_plate(self.camera, frame, track_id, detection, self._recorder.recording_id)
 
     def _emit_object_event(self, frame, detection, detection_id) -> None:
         # See OBJECT_EVENT_COOLDOWN_SECONDS's docstring: a "new" track_id doesn't

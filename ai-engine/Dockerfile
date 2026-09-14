@@ -3,10 +3,13 @@ FROM python:3.12-slim
 WORKDIR /app
 
 # libgl1/libglib2.0-0 are required by opencv-python-headless's video decode/codec paths.
+# tesseract-ocr is the real OCR engine pytesseract shells out to (License Plate Reading
+# / ANPR — app/core/plate_reader.py).
 RUN apt-get update && apt-get install -y --no-install-recommends \
     libgl1 \
     libglib2.0-0 \
     ffmpeg \
+    tesseract-ocr \
     && rm -rf /var/lib/apt/lists/*
 
 COPY requirements.txt .

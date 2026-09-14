@@ -22,6 +22,7 @@ from app.api.routes import (
     system,
     tripwires,
     users,
+    vehicles,
     video_intelligence,
     ws,
     zones,
@@ -51,4 +52,5 @@ api_router.include_router(video_intelligence.router)
 api_router.include_router(sites.router)
 api_router.include_router(retention_tiers.router)
 api_router.include_router(storage.router)
+api_router.include_router(vehicles.router)
 api_router.include_router(ws.router)

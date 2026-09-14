@@ -23,6 +23,12 @@ class Permissions:
     # necessarily be able to restructure a tenant's site layout.
     VIEW_SITES = "view_sites"
     MANAGE_SITES = "manage_sites"
+    # Master Development Prompt Phase 1, "License Plate Reading (ANPR)" — mirrors the
+    # MANAGE_BIOMETRICS/VIEW_BIOMETRIC_EVENTS split exactly: managing the vehicle
+    # watchlist is admin-only, viewing plate recognition events is also granted to
+    # operators for the human-review workflow.
+    MANAGE_VEHICLE_WATCHLIST = "manage_vehicle_watchlist"
+    VIEW_VEHICLE_EVENTS = "view_vehicle_events"
     # Retention-tier policy (section 10) is deliberately Platform-Administrator-only
     # (SUPER_ADMIN) — not exposed here as a per-tenant permission at all; see
     # app/api/routes/retention_tiers.py, which gates directly on the SUPER_ADMIN role.
@@ -46,6 +52,8 @@ class Permissions:
             cls.VIEW_BIOMETRIC_EVENTS,
             cls.VIEW_SITES,
             cls.MANAGE_SITES,
+            cls.MANAGE_VEHICLE_WATCHLIST,
+            cls.VIEW_VEHICLE_EVENTS,
         ]
 
 
@@ -64,6 +72,7 @@ OPERATOR_PERMISSIONS = VIEWER_PERMISSIONS + [
     # Operators can review recognition events (section 12) but not enroll/manage
     # biometric profiles — that stays admin-only (section 17).
     Permissions.VIEW_BIOMETRIC_EVENTS,
+    Permissions.VIEW_VEHICLE_EVENTS,
 ]
 
 # Event-First Cloud Storage Phase 1 (section 22) — spec's "Security Manager": can
@@ -80,6 +89,7 @@ ADMIN_PERMISSIONS = SECURITY_MANAGER_PERMISSIONS + [
     Permissions.MANAGE_USERS,
     Permissions.MANAGE_SYSTEM_SETTINGS,
     Permissions.MANAGE_BIOMETRICS,
+    Permissions.MANAGE_VEHICLE_WATCHLIST,
 ]
 
 SUPER_ADMIN_PERMISSIONS = Permissions.all()

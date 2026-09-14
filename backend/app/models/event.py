@@ -41,6 +41,13 @@ class EventType(str, enum.Enum):
     # transition from at-or-under to over Camera.max_occupancy, not on every delta while
     # already over (see POST /cameras/{id}/internal/occupancy-delta).
     MAXIMUM_OCCUPANCY_EXCEEDED = "MAXIMUM_OCCUPANCY_EXCEEDED"
+    # Master Development Prompt Phase 1, "License Plate Reading (ANPR)" —
+    # LICENSE_PLATE_DETECTED is a plain sighting log (created for every real plate
+    # read regardless of watchlist status); VEHICLE_WATCHLIST_MATCH fires additionally
+    # when the read plate matches an ACTIVE VehicleWatchlist row with status
+    # WATCHLIST/BLACKLISTED — see violation_service.py's always-incident dispatch.
+    LICENSE_PLATE_DETECTED = "LICENSE_PLATE_DETECTED"
+    VEHICLE_WATCHLIST_MATCH = "VEHICLE_WATCHLIST_MATCH"
 
 
 class EventSeverity(str, enum.Enum):

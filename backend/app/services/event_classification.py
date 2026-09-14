@@ -24,6 +24,8 @@ _EVENT_TYPE_CATEGORY: dict[EventType, EventCategory] = {
     EventType.FACE_RECOGNIZED: EventCategory.PEOPLE,
     # VEHICLES
     EventType.VEHICLE_DETECTED: EventCategory.VEHICLES,
+    EventType.LICENSE_PLATE_DETECTED: EventCategory.VEHICLES,
+    EventType.VEHICLE_WATCHLIST_MATCH: EventCategory.SECURITY,
     # OPERATIONS
     EventType.MOTION_DETECTED: EventCategory.OPERATIONS,
     EventType.CAMERA_OFFLINE: EventCategory.OPERATIONS,

@@ -96,6 +96,21 @@ export function explainEvent(event: EventItem): string {
       return "The camera went offline or stopped reporting a heartbeat.";
     case "CAMERA_OBSTRUCTED":
       return "The camera's view has been unusually dark or texture-less for a sustained period — possibly a covered/blocked lens, or the camera pointed at a blank surface. This is a real but approximate heuristic, not a trained tamper-detection model — always verify with a human before treating it as confirmed tampering.";
+    case "MAXIMUM_OCCUPANCY_EXCEEDED": {
+      const current = m.current_occupancy;
+      const max = m.max_occupancy;
+      return `The camera's occupancy count${typeof current === "number" ? ` (${current})` : ""} exceeded the configured maximum${typeof max === "number" ? ` (${max})` : ""}.`;
+    }
+    case "LICENSE_PLATE_DETECTED": {
+      const plate = m.plate_text;
+      const vehicleType = m.vehicle_type;
+      return `A license plate${typeof plate === "string" ? ` '${plate}'` : ""} was read${typeof vehicleType === "string" ? ` from a ${vehicleType.toLowerCase()}` : ""}. This is an automated OCR read against a Haar-cascade-detected plate region, not a certified ANPR system — accuracy varies with camera angle/lighting/plate format.`;
+    }
+    case "VEHICLE_WATCHLIST_MATCH": {
+      const plate = m.plate_text;
+      const watchlistStatus = m.watchlist_status;
+      return `A read license plate${typeof plate === "string" ? ` ('${plate}')` : ""} matched an active vehicle watchlist entry${typeof watchlistStatus === "string" ? ` marked ${watchlistStatus}` : ""}. Verify the plate visually against the linked evidence before treating this as confirmed.`;
+    }
     case "RECORDING_FAILURE":
       return "The camera's recording pipeline reported a failure.";
     default:

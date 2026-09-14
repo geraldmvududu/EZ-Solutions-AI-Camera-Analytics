@@ -94,6 +94,13 @@ class Camera(Base, UUIDPKMixin, TimestampMixin, TenantScopedMixin):
     # CPU and pulls in a much larger torch/ultralytics dependency).
     multi_class_detection_enabled: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
 
+    # Master Development Prompt Phase 1, "License Plate Reading (ANPR)" — opt-in per
+    # camera, same pattern as face_recognition_enabled. Only takes effect together with
+    # multi_class_detection_enabled above (the default HOG detector never emits CAR/
+    # TRUCK/BUS/MOTORCYCLE detections for plate reading to run against at all) — same
+    # indirect-gating relationship theft detection already has with that same flag.
+    plate_recognition_enabled: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+
     # Event-First Cloud Storage Phase 1 (section 1) — nullable so existing cameras
     # (predating the Site concept) keep working unmigrated; the migration backfills a
     # "Default Site" per tenant and points every existing camera at it.

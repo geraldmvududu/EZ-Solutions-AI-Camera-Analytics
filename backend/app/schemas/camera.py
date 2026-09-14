@@ -35,6 +35,7 @@ class CameraCreate(BaseModel):
     site_id: uuid.UUID | None = None
     cloud_recording_enabled: bool = False
     max_occupancy: int | None = None
+    plate_recognition_enabled: bool = False
 
 
 class CameraUpdate(BaseModel):
@@ -64,6 +65,7 @@ class CameraUpdate(BaseModel):
     site_id: uuid.UUID | None = None
     cloud_recording_enabled: bool | None = None
     max_occupancy: int | None = None
+    plate_recognition_enabled: bool | None = None
 
 
 class CameraResponse(BaseModel):
@@ -97,6 +99,7 @@ class CameraResponse(BaseModel):
     cloud_recording_enabled: bool
     current_occupancy: int
     max_occupancy: int | None
+    plate_recognition_enabled: bool
     status: CameraStatus
     is_active: bool
     is_demo: bool

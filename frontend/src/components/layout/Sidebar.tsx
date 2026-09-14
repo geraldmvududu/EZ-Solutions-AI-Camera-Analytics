@@ -18,6 +18,8 @@ const NAV_ITEMS = [
   { to: "/faces/enrolled", label: "Enrolled People", icon: "◐", permission: "view_biometric_events" },
   { to: "/faces/enroll", label: "Enroll Person", icon: "◐", permission: "manage_biometrics" },
   { to: "/faces/events", label: "Recognition Events", icon: "◐", permission: "view_biometric_events" },
+  { to: "/vehicles/watchlist", label: "Vehicle Watchlist", icon: "▧", permission: "view_vehicle_events" },
+  { to: "/vehicles/plate-events", label: "Plate Recognition Events", icon: "▧", permission: "view_vehicle_events" },
   { to: "/analytics", label: "AI Analytics", icon: "▨", permission: "view_reports" },
   { to: "/storage-usage", label: "Storage Usage", icon: "▥", permission: "view_reports" },
   { to: "/system-health", label: "System Health", icon: "♥" },

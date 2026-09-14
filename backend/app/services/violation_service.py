@@ -88,6 +88,11 @@ _ALWAYS_INCIDENT_EVENT_TYPES = {
     EventType.TAILGATING_DETECTED,
     EventType.RESTRICTED_AREA_VIOLATION,
     EventType.POTENTIAL_THEFT_DETECTED,
+    # Master Development Prompt Phase 1, "License Plate Reading (ANPR)" — only ever
+    # fires once ai-engine's plate_reader.py has already matched an ACTIVE
+    # VehicleWatchlist row with status WATCHLIST/BLACKLISTED, same "the decision is
+    # already made, identity is enrichment not a gate" reasoning as theft detection.
+    EventType.VEHICLE_WATCHLIST_MATCH,
 }
 
 # compute_risk_score's weights (spec section 19) — deliberately simple and documented
@@ -158,10 +163,25 @@ _ALWAYS_INCIDENT_TITLE = {
     EventType.TAILGATING_DETECTED: "Possible Tailgating",
     EventType.RESTRICTED_AREA_VIOLATION: "Restricted Area Violation",
     EventType.POTENTIAL_THEFT_DETECTED: "Potential Theft / Unauthorized Object Removal",
+    EventType.VEHICLE_WATCHLIST_MATCH: "Vehicle Watchlist Match",
 }
 
 
 def _build_always_incident_description(event: Event, camera: Camera, person: Person | None) -> str:
+    if event.event_type == EventType.VEHICLE_WATCHLIST_MATCH:
+        plate = event.event_metadata.get("plate_text", "unknown plate")
+        status = event.event_metadata.get("watchlist_status", "WATCHLIST")
+        vehicle_type = event.event_metadata.get("vehicle_type", "vehicle").lower()
+        confidence = event.event_metadata.get("confidence")
+        confidence_note = f" (OCR confidence {confidence * 100:.0f}%)" if isinstance(confidence, (int, float)) else ""
+        return (
+            f"A {vehicle_type} with license plate '{plate}' was read by camera '{camera.name}' at "
+            f"{event.occurred_at.isoformat()}{confidence_note} and matched an active vehicle watchlist entry "
+            f"marked {status}. This is an automated OCR read against a Haar-cascade-detected plate region, not a "
+            f"certified ANPR system — real-world read accuracy varies with camera angle/lighting/plate format. "
+            f"Verify the plate visually against the linked evidence before treating this as confirmed."
+        )
+
     identity = _identity_clause(person, event.event_metadata.get("person_recognition_confidence"))
     when = event.occurred_at.isoformat()
 

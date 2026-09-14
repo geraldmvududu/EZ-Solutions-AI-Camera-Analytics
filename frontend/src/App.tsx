@@ -23,6 +23,8 @@ import { RecognitionEventsPage } from "./pages/faces/RecognitionEvents";
 import { VideoIntelligenceDashboardPage } from "./pages/VideoIntelligenceDashboard";
 import { VideoIntelligenceSettingsPage } from "./pages/VideoIntelligenceSettings";
 import { StorageUsagePage } from "./pages/StorageUsage";
+import { VehicleWatchlistPage } from "./pages/vehicles/VehicleWatchlist";
+import { PlateRecognitionEventsPage } from "./pages/vehicles/PlateRecognitionEvents";
 
 export default function App() {
   return (
@@ -105,6 +107,22 @@ export default function App() {
           element={
             <ProtectedRoute permission="view_biometric_events">
               <RecognitionEventsPage />
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="/vehicles/watchlist"
+          element={
+            <ProtectedRoute permission="view_vehicle_events">
+              <VehicleWatchlistPage />
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="/vehicles/plate-events"
+          element={
+            <ProtectedRoute permission="view_vehicle_events">
+              <PlateRecognitionEventsPage />
             </ProtectedRoute>
           }
         />
