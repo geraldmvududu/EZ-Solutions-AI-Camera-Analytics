@@ -28,6 +28,7 @@ export interface CameraCreatePayload {
   multi_class_detection_enabled?: boolean;
   site_id?: string | null;
   cloud_recording_enabled?: boolean;
+  max_occupancy?: number | null;
 }
 
 export const listCameras = () => apiRequest<Camera[]>("/api/cameras");

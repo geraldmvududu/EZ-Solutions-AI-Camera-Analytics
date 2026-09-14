@@ -371,6 +371,16 @@ class CameraWorker:
             direction = crossed_line(prev_point, centroid, tripwire["line"])
             if direction is None:
                 continue
+
+            # Master Development Prompt Phase 1, "Crowd/Occupancy Counting" —
+            # deliberately independent of the tripwire's own `direction` FILTER just
+            # below (that only decides whether a VIOLATION-style event is reported for
+            # this specific direction) and of TRIPWIRE_VIOLATION_COOLDOWN_SECONDS below
+            # that (a real queue of several people passing within the cooldown window
+            # must still all be counted, not silently dropped after the first).
+            if tripwire.get("occupancy_counting_enabled"):
+                backend_client.report_occupancy_delta(self.camera_id, 1 if direction == "ENTERING" else -1)
+
             configured_direction = tripwire.get("direction", "BOTH")
             if configured_direction != "BOTH" and configured_direction != direction:
                 continue

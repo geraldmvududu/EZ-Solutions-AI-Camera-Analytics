@@ -31,3 +31,11 @@ class Tripwire(Base, UUIDPKMixin, TimestampMixin, TenantScopedMixin):
     gate_jump_detection_enabled: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     tailgating_detection_enabled: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     tailgating_window_seconds: Mapped[int] = mapped_column(Integer, default=5, nullable=False)
+
+    # Master Development Prompt Phase 1, "Crowd/Occupancy Counting" — independent of
+    # `direction` above, which only filters which crossings raise a TRIPWIRE_VIOLATION-
+    # style event; ai-engine's crossed_line() already reports both ENTERING and EXITING
+    # regardless of that filter, and occupancy counting needs both to keep an accurate
+    # net count. Opt-in per tripwire, not global — counting only makes sense on a line
+    # actually drawn across an entry/exit point, not e.g. a gate/fence tripwire.
+    occupancy_counting_enabled: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)

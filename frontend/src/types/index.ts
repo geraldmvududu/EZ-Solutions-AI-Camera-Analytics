@@ -42,6 +42,8 @@ export interface Camera {
   multi_class_detection_enabled: boolean;
   site_id: string | null;
   cloud_recording_enabled: boolean;
+  current_occupancy: number;
+  max_occupancy: number | null;
   status: CameraStatus;
   is_active: boolean;
   is_demo: boolean;

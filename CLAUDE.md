@@ -802,6 +802,45 @@ four).
   never a correlation target — a later event sharing its `correlation_key` opens a fresh
   incident rather than silently reopening a closed one.
 
+**Master Development Prompt Phase 1 — Crowd/Occupancy Counting** (`backend/app/api/
+routes/cameras.py`, `ai-engine/app/worker.py`): the third of four sub-phases. Real gap
+found by direct code read: zero occupancy/crowd/queue code existed anywhere in this
+codebase before this.
+
+- `Tripwire.occupancy_counting_enabled` (new, opt-in per tripwire, off by default) is
+  deliberately independent of that same tripwire's existing `direction` field —
+  `direction` only filters which crossings raise a TRIPWIRE_VIOLATION-style event;
+  `ai-engine/app/core/zones.py::crossed_line` already reports both ENTERING and EXITING
+  regardless of it, and occupancy counting needs both to keep an accurate net count.
+- `worker.py::_check_tripwires` posts a real `+1`/`-1` delta
+  (`backend_client.report_occupancy_delta`) the moment `crossed_line()` finds a genuine
+  crossing — placed BEFORE both the `direction` filter and
+  `TRIPWIRE_VIOLATION_COOLDOWN_SECONDS` in that function, deliberately: a real queue of
+  several different people passing within the 30s violation-cooldown window must all be
+  counted, not silently dropped after the first the way violation reporting itself is.
+- New `POST /cameras/{id}/internal/occupancy-delta` maintains `Camera.current_occupancy`
+  (clamped at 0 — an EXITING delta arriving before its matching ENTERING one was ever
+  recorded, e.g. after a worker restart lost the running count, must never go negative)
+  and fires `MAXIMUM_OCCUPANCY_EXCEEDED` (HIGH severity) only on the transition from
+  at-or-under to over the new, nullable, admin-configurable `Camera.max_occupancy` — not
+  on every delta while already over, the same debounce convention as every other event
+  in this codebase. `max_occupancy` unset means occupancy is still tracked and shown,
+  just never triggers an alert.
+- Frontend: `Cameras.tsx` gained a "Max Occupancy" field, `ZonesEditor.tsx` gained a
+  "Count for occupancy" checkbox on tripwires (with an "· occupancy" badge on the saved
+  list, matching the existing gate-jump/tailgating badge convention), and the AI
+  Analytics dashboard (`Analytics.tsx`) gained a real-time "Occupancy" panel — current
+  count per camera (red when over the configured max), sourced directly from
+  `listCameras()` rather than a new aggregate endpoint, since the live count is already
+  a plain column on `Camera`.
+- Real, disclosed scope limit shared with every other AI Video Intelligence feature that
+  needs a real tracked object: the SIMULATED camera's synthetic shape
+  (`ai-engine/app/sources/simulated_source.py`) only moves horizontally at a fixed
+  vertical position, so it can never cross a horizontal tripwire line at all regardless
+  of this feature — occupancy counting on a SIMULATED camera needs a tripwire drawn
+  vertically (or the shape's motion changed), and genuine testing needs a real
+  VIDEO_FILE/RTSP camera showing people actually entering/exiting.
+
 ## Development commands
 
 ```bash
@@ -824,7 +863,7 @@ cd ai-engine && python -m app.main
 ## Testing commands
 
 ```bash
-cd backend && pytest -q      # 245 tests: auth, RBAC, tenant isolation, camera CRUD
+cd backend && pytest -q      # 253 tests: auth, RBAC, tenant isolation, camera CRUD
                               # (including the delete cascade covering every dependent
                               # table), credential encryption, rule engine, analytics
                               # aggregates, report export, the Redis-backed rate limiter
@@ -930,8 +969,16 @@ cd backend && pytest -q      # 245 tests: auth, RBAC, tenant isolation, camera C
                               # correlation_window_seconds=0 disables correlation
                               # entirely, a RESOLVED/CLOSED incident is never a
                               # correlation target, and the person_id fallback works
-                              # standalone for the identified-person path)
-cd ai-engine && pytest -q    # 124 tests: centroid tracker (including type-aware
+                              # standalone for the identified-person path), and crowd/
+                              # occupancy counting (Master Development Prompt Phase 1 —
+                              # deltas increment/decrement current_occupancy and clamp
+                              # at 0, MAXIMUM_OCCUPANCY_EXCEEDED fires exactly once on
+                              # the over-limit transition and never refires while still
+                              # over, no max_occupancy configured never fires at all,
+                              # dropping back under and exceeding again correctly
+                              # refires, and max_occupancy is real admin-settable/
+                              # returned camera state)
+cd ai-engine && pytest -q    # 129 tests: centroid tracker (including type-aware
                               # matching so a multi-class detector can't let a track
                               # of one object_type steal another's), zone/tripwire
                               # geometry, loitering timer, motion detection (real MOG2 background
@@ -1016,7 +1063,14 @@ cd ai-engine && pytest -q    # 124 tests: centroid tracker (including type-aware
                               # cooldown, and a genuine frame in between resets the
                               # streak — plus the real "never-yet-fired must never look
                               # like it's in cooldown" bug this test suite itself caught
-                              # before it ever ran live, from a 0.0 cooldown-timer default)
+                              # before it ever ran live, from a 0.0 cooldown-timer default),
+                              # and occupancy-delta reporting (Master Development Prompt
+                              # Phase 1 — ENTERING/EXITING crossings report +1/-1
+                              # regardless of the tripwire's own direction filter or the
+                              # unrelated TRIPWIRE_VIOLATION cooldown, a disabled
+                              # tripwire never reports, and a real queue of several
+                              # different tracked people within the cooldown window are
+                              # all still counted, none silently dropped)
 cd worker && pytest -q       # 25 tests: retention cleanup for recordings/snapshots/
                               # face-recognition-events/face-profiles against a real
                               # SQLite DB with a hand-crafted minimal schema (the
@@ -1492,7 +1546,7 @@ narrowly-scoped IAM key in production — never reuse a broader-privileged crede
 | 10. Facial Recognition & Identity Analytics | Phase 1 + Phase 2 done, tested, verified in a real browser — enroll/manage people, real detect→embed→match pipeline, recognition events feeding the existing event/alert/rule/notification/WebSocket pipeline, camera + zone config, human review, identified-person violation → auto-Incident, recordings linked to face/violation events with in-browser seekable playback, multi-frame confirmation, liveness (narrow scope, limitation 12), retention enforcement, and a CSV appearance-history export. Full drag-and-drop rules-builder UI is still out of scope (rules are managed via the existing generic Rules page) |
 | 11. AI Video Intelligence | Phase 1 + Phase 2 done, tested, verified in a real browser — gate-jumping/climbing (heuristic), tailgating, restricted-area, and now potential-theft detection (real YOLOv8n multi-class detector, opt-in per camera; backpack/handbag/suitcase removal from a monitored zone) extending the existing tripwire/zone pipeline; a real, transparent risk score; auto-created Incidents with a template-based (not LLM) AI summary; real ffmpeg-trimmed evidence clips; a dashboard and settings page; a PDF report section. Abandoned-object detection (not requested) and fall detection (Phase 3, needs pose estimation) are deliberately not built yet — see limitations 17-19 |
 | 12. Event-First Cloud Storage | Phase 1 done, tested — Site hierarchy (Customer → Site → Camera), a real object-storage abstraction (MinIO in dev / real AWS S3 in production, same code path) with presigned-URL serving, configurable per-tenant retention tiers with worker-side enforcement, per-event review/notes/categorization with real filter UI on Events/Alerts, a storage-usage dashboard, and a new SECURITY_MANAGER role. See limitations 20-22 for the explicit out-of-scope list (multi-channel alerts, offline edge queue-and-sync, generalized dedup/cooldown config, per-user site-level RBAC, S3 lifecycle policies, AWS Cost Explorer billing) |
-| 13. Master Development Prompt Phase 1 | Sub-phase 1 (Camera & System Health) and sub-phase 2 (Multi-event Incident Correlation) done, tested, verified live — real auto-offline detection, the OFFLINE→ONLINE transition event, a disclosed lens-obstruction heuristic, and merging related violation events for the same tracked person/object into one growing incident instead of several. Sub-phases 3-4 (crowd/occupancy counting, license plate reading/ANPR) in progress. Weapons, fire/smoke, PPE, fight/violence, and fall detection deliberately skipped — no trained model this environment can obtain/verify exists for any of them, and the user chose honesty over a feature that looks reliable but isn't for safety-critical categories |
+| 13. Master Development Prompt Phase 1 | Sub-phases 1-3 done, tested, verified live: Camera & System Health (real auto-offline detection, the OFFLINE→ONLINE transition event, a disclosed lens-obstruction heuristic), Multi-event Incident Correlation (merging related violation events for the same tracked person/object into one growing incident instead of several), and Crowd/Occupancy Counting (real per-tripwire entry/exit counting independent of violation cooldowns, a configurable max-occupancy alert, a live dashboard panel). Sub-phase 4 (license plate reading/ANPR) in progress. Weapons, fire/smoke, PPE, fight/violence, and fall detection deliberately skipped — no trained model this environment can obtain/verify exists for any of them, and the user chose honesty over a feature that looks reliable but isn't for safety-critical categories |
 
 ## Verified end-to-end (not just "should work")
 
@@ -1982,3 +2036,23 @@ narrowly-scoped IAM key in production — never reuse a broader-privileged crede
   they always meant to (cooldown expiry, cooldown disabling, per-type scoping), each now
   a documented example distinguishing correlation's job from cooldown's. `cd backend &&
   pytest -q` (245) and `cd frontend && npm run build` both green throughout.
+- **Master Development Prompt Phase 1 — Crowd/Occupancy Counting, end-to-end against the
+  real local dev backend.** Enabled `occupancy_counting_enabled` on the real "Gate Line"
+  tripwire and set `max_occupancy=1` on the "Main Gate" camera through the actual API
+  (confirmed via `GET`). Attempted to trigger a real crossing through the live
+  SIMULATED camera first and found a genuine, disclosed limitation in the process:
+  `ai-engine/app/sources/simulated_source.py`'s synthetic rectangle only moves
+  horizontally at a fixed vertical position, so it can never cross a horizontal
+  tripwire line at all (and HOG can't detect the synthetic shape as a person anyway,
+  per that module's own existing honesty note) — confirmed by checking the Events page
+  and seeing only real `MOTION_DETECTED` events, never a `TRIPWIRE_VIOLATION`, no
+  matter how long the camera ran. This is the exact same SIMULATED-camera boundary
+  already disclosed for AI Video Intelligence Phase 1/2, so verified the same way those
+  were: posted real `+1`/`+1`/`+1` deltas directly against the actual
+  `POST /cameras/{id}/internal/occupancy-delta` endpoint (as ai-engine's `worker.py`
+  would) and confirmed in the real browser that `current_occupancy` reached 3, a real
+  `MAXIMUM_OCCUPANCY_EXCEEDED` (HIGH) event appeared on the Events page, and the AI
+  Analytics dashboard's new "Occupancy" panel showed "Main Gate 3 / 1" in the correct
+  over-limit color. Reset the camera's occupancy/max_occupancy and the tripwire's
+  opt-in back to their pre-test state afterward. `cd backend && pytest -q` (253),
+  `cd ai-engine && pytest -q` (129), and `cd frontend && npm run build` all green.

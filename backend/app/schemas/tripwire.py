@@ -15,6 +15,7 @@ class TripwireCreate(BaseModel):
     gate_jump_detection_enabled: bool = False
     tailgating_detection_enabled: bool = False
     tailgating_window_seconds: int = 5
+    occupancy_counting_enabled: bool = False
 
 
 class TripwireUpdate(BaseModel):
@@ -25,6 +26,7 @@ class TripwireUpdate(BaseModel):
     gate_jump_detection_enabled: bool | None = None
     tailgating_detection_enabled: bool | None = None
     tailgating_window_seconds: int | None = None
+    occupancy_counting_enabled: bool | None = None
 
 
 class TripwireResponse(BaseModel):
@@ -38,5 +40,6 @@ class TripwireResponse(BaseModel):
     gate_jump_detection_enabled: bool
     tailgating_detection_enabled: bool
     tailgating_window_seconds: int
+    occupancy_counting_enabled: bool
 
     model_config = {"from_attributes": True}

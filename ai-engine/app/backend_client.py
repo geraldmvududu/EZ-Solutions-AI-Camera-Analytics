@@ -65,6 +65,14 @@ class BackendClient:
         pass)."""
         self._safe_post(f"/api/cameras/{camera_id}/internal/mark-video-processed", {})
 
+    def report_occupancy_delta(self, camera_id: str, delta: int) -> None:
+        """Master Development Prompt Phase 1, "Crowd/Occupancy Counting" — posted once
+        per real ENTERING (+1) or EXITING (-1) crossing of a tripwire with
+        occupancy_counting_enabled, regardless of that tripwire's own direction filter
+        or the unrelated TRIPWIRE_VIOLATION cooldown (counting must never silently drop
+        a crossing the way violation-reporting throttles do)."""
+        self._safe_post(f"/api/cameras/{camera_id}/internal/occupancy-delta", {"delta": delta})
+
     def create_detection(self, payload: dict) -> dict | None:
         return self._safe_post("/api/detections", payload)
 

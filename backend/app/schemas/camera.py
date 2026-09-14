@@ -34,6 +34,7 @@ class CameraCreate(BaseModel):
     multi_class_detection_enabled: bool = False
     site_id: uuid.UUID | None = None
     cloud_recording_enabled: bool = False
+    max_occupancy: int | None = None
 
 
 class CameraUpdate(BaseModel):
@@ -62,6 +63,7 @@ class CameraUpdate(BaseModel):
     multi_class_detection_enabled: bool | None = None
     site_id: uuid.UUID | None = None
     cloud_recording_enabled: bool | None = None
+    max_occupancy: int | None = None
 
 
 class CameraResponse(BaseModel):
@@ -93,6 +95,8 @@ class CameraResponse(BaseModel):
     multi_class_detection_enabled: bool
     site_id: uuid.UUID | None
     cloud_recording_enabled: bool
+    current_occupancy: int
+    max_occupancy: int | None
     status: CameraStatus
     is_active: bool
     is_demo: bool
@@ -127,3 +131,11 @@ class CameraInternalResponse(CameraResponse):
     tailgating_enabled: bool = True
     restricted_area_enabled: bool = True
     theft_detection_enabled: bool = True
+
+
+class OccupancyDelta(BaseModel):
+    """Body for POST /cameras/{id}/internal/occupancy-delta — ai-engine posts +1 for a
+    real ENTERING crossing and -1 for EXITING, for any tripwire with
+    Tripwire.occupancy_counting_enabled."""
+
+    delta: int

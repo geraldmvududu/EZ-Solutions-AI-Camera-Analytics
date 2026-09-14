@@ -48,6 +48,7 @@ export function ZonesEditorPage() {
   const [direction, setDirection] = useState<TripwireDirection>("BOTH");
   const [gateJumpEnabled, setGateJumpEnabled] = useState(false);
   const [tailgatingEnabled, setTailgatingEnabled] = useState(false);
+  const [occupancyCountingEnabled, setOccupancyCountingEnabled] = useState(false);
   const [tailgatingWindow, setTailgatingWindow] = useState(5);
   const [name, setName] = useState("");
   const [points, setPoints] = useState<[number, number][]>([]);
@@ -192,6 +193,7 @@ export function ZonesEditorPage() {
           gate_jump_detection_enabled: gateJumpEnabled,
           tailgating_detection_enabled: tailgatingEnabled,
           tailgating_window_seconds: tailgatingWindow,
+          occupancy_counting_enabled: occupancyCountingEnabled,
         });
       }
       setName("");
@@ -199,6 +201,7 @@ export function ZonesEditorPage() {
       setGateJumpEnabled(false);
       setTailgatingEnabled(false);
       setTailgatingWindow(5);
+      setOccupancyCountingEnabled(false);
       loadZonesAndTripwires(cameraId);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to save");
@@ -443,6 +446,22 @@ export function ZonesEditorPage() {
                     />
                   </div>
                 )}
+
+                <div className="text-xs text-slate-400 mb-1 mt-3">Crowd / Occupancy Analytics</div>
+                <label className="flex items-center gap-2 text-xs text-slate-300 mb-2">
+                  <input
+                    type="checkbox"
+                    checked={occupancyCountingEnabled}
+                    onChange={(e) => setOccupancyCountingEnabled(e.target.checked)}
+                  />
+                  Count for occupancy
+                </label>
+                {occupancyCountingEnabled && (
+                  <p className="text-xs text-slate-500 mb-3">
+                    Every crossing counts, regardless of the Direction setting above — entering adds 1, exiting
+                    subtracts 1. Set a Max Occupancy on the Cameras page to get an alert when it's exceeded.
+                  </p>
+                )}
               </>
             )}
 
@@ -483,6 +502,7 @@ export function ZonesEditorPage() {
                   {t.name} <span className="text-slate-500">({t.direction})</span>
                   {t.gate_jump_detection_enabled && <span className="ml-1 text-accent-500">· gate-jump</span>}
                   {t.tailgating_detection_enabled && <span className="ml-1 text-accent-500">· tailgating</span>}
+                  {t.occupancy_counting_enabled && <span className="ml-1 text-accent-500">· occupancy</span>}
                 </span>
                 <button onClick={() => handleDeleteTripwire(t.id)} className="text-severity-critical hover:underline">
                   Delete

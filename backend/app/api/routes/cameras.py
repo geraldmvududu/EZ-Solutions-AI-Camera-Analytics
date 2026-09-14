@@ -33,7 +33,7 @@ from app.models.snapshot import Snapshot
 from app.models.tripwire import Tripwire
 from app.models.user import User
 from app.models.zone import Zone
-from app.schemas.camera import CameraCreate, CameraInternalResponse, CameraResponse, CameraUpdate
+from app.schemas.camera import CameraCreate, CameraInternalResponse, CameraResponse, CameraUpdate, OccupancyDelta
 
 router = APIRouter(prefix="/cameras", tags=["cameras"])
 settings = get_settings()
@@ -160,6 +160,7 @@ def create_camera(
         multi_class_detection_enabled=payload.multi_class_detection_enabled,
         site_id=payload.site_id,
         cloud_recording_enabled=payload.cloud_recording_enabled,
+        max_occupancy=payload.max_occupancy,
     )
     db.add(camera)
     db.commit()
@@ -485,6 +486,50 @@ def mark_video_processed_internal(camera_id: uuid.UUID, db: Session = Depends(ge
         camera.is_active = False
         db.commit()
     return {"detail": "ok"}
+
+
+@router.post("/{camera_id}/internal/occupancy-delta", include_in_schema=False, dependencies=[Depends(require_internal_service)])
+async def report_occupancy_delta(camera_id: uuid.UUID, payload: OccupancyDelta, db: Session = Depends(get_db)) -> dict:
+    """Master Development Prompt Phase 1, "Crowd/Occupancy Counting" — called by
+    worker.py once per real ENTERING (+1) or EXITING (-1) crossing of a tripwire with
+    occupancy_counting_enabled, regardless of that tripwire's own `direction` filter or
+    TRIPWIRE_VIOLATION_COOLDOWN_SECONDS (those gate violation reporting, not counting —
+    a queue of several people passing within the cooldown window must still all be
+    counted). Fires MAXIMUM_OCCUPANCY_EXCEEDED only on the transition from at-or-under
+    to over max_occupancy, not on every delta while already over, mirroring every other
+    debounced event in this codebase."""
+    from datetime import datetime, timezone
+
+    from app.api.routes.events import create_event_and_process
+    from app.models.event import EventSeverity, EventType
+    from app.schemas.event import EventCreate
+
+    camera = db.get(Camera, camera_id)
+    if camera is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Camera not found")
+
+    previous = camera.current_occupancy
+    camera.current_occupancy = max(0, previous + payload.delta)
+    db.commit()
+    db.refresh(camera)
+
+    if camera.max_occupancy is not None and previous <= camera.max_occupancy < camera.current_occupancy:
+        await create_event_and_process(
+            db, camera,
+            EventCreate(
+                camera_id=camera.id,
+                event_type=EventType.MAXIMUM_OCCUPANCY_EXCEEDED,
+                severity=EventSeverity.HIGH,
+                description=(
+                    f'Camera "{camera.name}" occupancy ({camera.current_occupancy}) exceeded the configured '
+                    f"maximum ({camera.max_occupancy})."
+                ),
+                occurred_at=datetime.now(timezone.utc),
+                event_metadata={"current_occupancy": camera.current_occupancy, "max_occupancy": camera.max_occupancy},
+            ),
+        )
+
+    return {"current_occupancy": camera.current_occupancy}
 
 
 @router.get("/{camera_id}/stream")

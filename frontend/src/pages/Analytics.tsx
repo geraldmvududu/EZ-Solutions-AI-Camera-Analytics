@@ -4,6 +4,8 @@ import { StatCard } from "../components/ui/StatCard";
 import { HorizontalBarChart, HourlyBarChart } from "../components/ui/BarChart";
 import * as analyticsApi from "../api/analytics";
 import type { AnalyticsSummary } from "../api/analytics";
+import * as camerasApi from "../api/cameras";
+import type { Camera } from "../types";
 
 const SEVERITY_COLORS: Record<string, string> = {
   INFO: "#3b82f6",
@@ -29,6 +31,11 @@ export function AnalyticsPage() {
   const [startDate, setStartDate] = useState(toDateInputValue(7));
   const [endDate, setEndDate] = useState(toDateInputValue(0));
   const [downloading, setDownloading] = useState<string | null>(null);
+  const [cameras, setCameras] = useState<Camera[]>([]);
+
+  useEffect(() => {
+    camerasApi.listCameras().then(setCameras).catch(() => {});
+  }, []);
 
   function load() {
     const params: Record<string, string> = {};
@@ -117,6 +124,34 @@ export function AnalyticsPage() {
             <StatCard label="Total Detections" value={summary.total_detections} />
             <StatCard label="Storage Used" value={`${formatBytes(summary.storage_used_bytes)} / ${formatBytes(summary.storage_total_bytes)}`} />
           </div>
+
+          {cameras.some((c) => c.max_occupancy != null || c.current_occupancy > 0) && (
+            <div className="rounded-lg border border-base-700 bg-base-900 p-4 mb-6">
+              <div className="font-semibold text-slate-200 text-sm mb-3">Occupancy</div>
+              <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+                {cameras
+                  .filter((c) => c.max_occupancy != null || c.current_occupancy > 0)
+                  .map((c) => (
+                    <div key={c.id} className="rounded border border-base-700 bg-base-800 p-3">
+                      <div className="text-xs text-slate-400 truncate">{c.name}</div>
+                      <div
+                        className={`text-2xl font-semibold ${
+                          c.max_occupancy != null && c.current_occupancy > c.max_occupancy
+                            ? "text-severity-critical"
+                            : "text-slate-100"
+                        }`}
+                      >
+                        {c.current_occupancy}
+                        {c.max_occupancy != null && <span className="text-sm text-slate-500"> / {c.max_occupancy}</span>}
+                      </div>
+                    </div>
+                  ))}
+              </div>
+              <p className="text-xs text-slate-500 mt-3">
+                Live count from tripwires with "Count for occupancy" enabled — not affected by the date range above.
+              </p>
+            </div>
+          )}
 
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-6">
             <div className="rounded-lg border border-base-700 bg-base-900 p-4">

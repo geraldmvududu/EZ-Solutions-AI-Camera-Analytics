@@ -31,6 +31,7 @@ _EVENT_TYPE_CATEGORY: dict[EventType, EventCategory] = {
     EventType.RECORDING_FAILURE: EventCategory.OPERATIONS,
     EventType.AI_DETECTION: EventCategory.OPERATIONS,
     EventType.CAMERA_OBSTRUCTED: EventCategory.OPERATIONS,
+    EventType.MAXIMUM_OCCUPANCY_EXCEEDED: EventCategory.OPERATIONS,
 }
 
 

@@ -31,6 +31,7 @@ function CameraFormModal({
   const [password, setPassword] = useState("");
   const [siteId, setSiteId] = useState(camera?.site_id ?? "");
   const [cloudRecordingEnabled, setCloudRecordingEnabled] = useState(camera?.cloud_recording_enabled ?? false);
+  const [maxOccupancy, setMaxOccupancy] = useState<string>(camera?.max_occupancy != null ? String(camera.max_occupancy) : "");
   const [faceRecognitionEnabled, setFaceRecognitionEnabled] = useState(camera?.face_recognition_enabled ?? false);
   const [faceThreshold, setFaceThreshold] = useState(camera?.face_recognition_threshold?.toString() ?? "");
   const [faceHoursStart, setFaceHoursStart] = useState(camera?.face_operating_hours_start ?? "");
@@ -70,6 +71,7 @@ function CameraFormModal({
         password: password || undefined,
         site_id: siteId || null,
         cloud_recording_enabled: cloudRecordingEnabled,
+        max_occupancy: maxOccupancy.trim() === "" ? null : Number(maxOccupancy),
         face_recognition_enabled: faceRecognitionEnabled,
         face_recognition_threshold: faceThreshold ? Number(faceThreshold) : undefined,
         face_operating_hours_start: faceHoursStart || undefined,
@@ -197,6 +199,22 @@ function CameraFormModal({
           <p className="text-xs text-slate-500 mt-1">
             Off by default — only AI-event recordings/snapshots/evidence clips upload to cloud storage. Turn this on
             to also upload this camera's continuous recordings.
+          </p>
+        </div>
+
+        <div className="border-t border-base-700 pt-3">
+          <label className="block text-sm text-slate-300 mb-1">Max Occupancy (crowd/occupancy counting)</label>
+          <input
+            type="number"
+            min={0}
+            value={maxOccupancy}
+            onChange={(e) => setMaxOccupancy(e.target.value)}
+            placeholder="No limit"
+            className="w-full rounded bg-base-800 border border-base-600 px-2 py-1.5 text-sm text-slate-100"
+          />
+          <p className="text-xs text-slate-500 mt-1">
+            Requires at least one tripwire on this camera with "Count for occupancy" enabled (Zones & Tripwires page).
+            Leave blank for no limit — occupancy is still tracked and shown, just never triggers an alert.
           </p>
         </div>
 

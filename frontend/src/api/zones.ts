@@ -23,6 +23,7 @@ export interface Tripwire {
   gate_jump_detection_enabled: boolean;
   tailgating_detection_enabled: boolean;
   tailgating_window_seconds: number;
+  occupancy_counting_enabled: boolean;
 }
 
 export const listZones = (cameraId: string) => apiRequest<Zone[]>(`/api/zones?camera_id=${cameraId}`);
@@ -44,5 +45,6 @@ export const createTripwire = (payload: {
   gate_jump_detection_enabled?: boolean;
   tailgating_detection_enabled?: boolean;
   tailgating_window_seconds?: number;
+  occupancy_counting_enabled?: boolean;
 }) => apiRequest<Tripwire>("/api/tripwires", { method: "POST", body: payload });
 export const deleteTripwire = (id: string) => apiRequest<void>(`/api/tripwires/${id}`, { method: "DELETE" });

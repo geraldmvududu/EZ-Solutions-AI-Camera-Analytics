@@ -37,6 +37,10 @@ class EventType(str, enum.Enum):
     # (sustained near-zero-texture or near-total-darkness frame), not a trained tamper
     # classifier.
     CAMERA_OBSTRUCTED = "CAMERA_OBSTRUCTED"
+    # Master Development Prompt Phase 1, "Crowd/Occupancy Counting" — fires on the
+    # transition from at-or-under to over Camera.max_occupancy, not on every delta while
+    # already over (see POST /cameras/{id}/internal/occupancy-delta).
+    MAXIMUM_OCCUPANCY_EXCEEDED = "MAXIMUM_OCCUPANCY_EXCEEDED"
 
 
 class EventSeverity(str, enum.Enum):

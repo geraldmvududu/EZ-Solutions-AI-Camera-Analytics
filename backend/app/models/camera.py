@@ -106,6 +106,17 @@ class Camera(Base, UUIDPKMixin, TimestampMixin, TenantScopedMixin):
     # snapshots and non-continuous (event/motion) recordings.
     cloud_recording_enabled: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
 
+    # Master Development Prompt Phase 1, "Crowd/Occupancy Counting" — current_occupancy
+    # is a running net count maintained by POST /{id}/internal/occupancy-delta (ai-engine
+    # posts +1/-1 per real ENTERING/EXITING crossing of a tripwire with
+    # Tripwire.occupancy_counting_enabled), never negative (clamped at 0 — a delta
+    # arriving out of order, e.g. an EXITING count before the matching ENTERING one was
+    # ever recorded, must not produce a nonsensical negative occupancy). max_occupancy is
+    # nullable — no configured limit means no MAXIMUM_OCCUPANCY_EXCEEDED event is ever
+    # possible for this camera, not a limit of 0.
+    current_occupancy: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    max_occupancy: Mapped[int | None] = mapped_column(Integer, nullable=True)
+
     status: Mapped[CameraStatus] = mapped_column(Enum(CameraStatus), default=CameraStatus.OFFLINE, nullable=False)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     is_demo: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
