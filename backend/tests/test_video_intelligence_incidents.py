@@ -5,7 +5,8 @@ zone/tripwire logic has already decided a violation occurred — identity is an 
 enrichment ("Unknown Person" when absent), not a gate. See app/services/
 violation_service.py."""
 
-from datetime import datetime, timezone
+import uuid
+from datetime import datetime, timedelta, timezone
 
 from app.models.event import EventSeverity
 from app.models.incident import Incident
@@ -49,6 +50,126 @@ def test_gate_jumping_creates_incident_without_a_recognized_person(client, admin
     assert incident["risk_score"] is not None
     assert "climbing or jumping" in incident["description"]
     assert "Unknown Person" in incident["description"]
+
+
+def test_gate_jumping_cooldown_suppresses_a_second_incident_within_the_window(client, db_session, admin_user, tenant):
+    """Real bug found live on the deployed VM: the always-incident dispatch had no
+    cooldown of its own — a looping test video replaying the same gate-jump content
+    every loop pass created a new Incident every time, indefinitely."""
+    from app.api.routes.video_intelligence import _get_or_create_settings
+
+    token = login(client, admin_user.email)
+    cam = client.post("/api/cameras", json={"name": "Perimeter", "source_type": "SIMULATED"}, headers=auth_headers(token)).json()
+    settings = _get_or_create_settings(db_session, tenant.id)
+    settings.incident_cooldown_seconds = 300
+    db_session.commit()
+
+    def _post_gate_jump():
+        return client.post(
+            "/api/events",
+            json={
+                "camera_id": cam["id"], "event_type": "GATE_JUMPING_DETECTED", "severity": "HIGH",
+                "occurred_at": datetime.now(timezone.utc).isoformat(),
+                "event_metadata": {"direction": "ENTERING", "tracking_id": 1, "confidence": 0.82},
+            },
+            headers=INTERNAL_HEADERS,
+        )
+
+    assert _post_gate_jump().status_code == 201
+    assert _post_gate_jump().status_code == 201  # the EVENT still gets created either way
+
+    incidents = client.get("/api/incidents", headers=auth_headers(token)).json()
+    assert len(incidents) == 1, "a second gate-jump within the cooldown window must not create a second incident"
+
+
+def test_gate_jumping_cooldown_allows_a_new_incident_after_the_window_expires(client, db_session, admin_user, tenant):
+    from app.api.routes.video_intelligence import _get_or_create_settings
+
+    token = login(client, admin_user.email)
+    cam = client.post("/api/cameras", json={"name": "Perimeter", "source_type": "SIMULATED"}, headers=auth_headers(token)).json()
+    settings = _get_or_create_settings(db_session, tenant.id)
+    settings.incident_cooldown_seconds = 300
+    db_session.commit()
+
+    def _post_gate_jump():
+        return client.post(
+            "/api/events",
+            json={
+                "camera_id": cam["id"], "event_type": "GATE_JUMPING_DETECTED", "severity": "HIGH",
+                "occurred_at": datetime.now(timezone.utc).isoformat(),
+                "event_metadata": {"direction": "ENTERING", "tracking_id": 1, "confidence": 0.82},
+            },
+            headers=INTERNAL_HEADERS,
+        )
+
+    assert _post_gate_jump().status_code == 201
+    incidents = client.get("/api/incidents", headers=auth_headers(token)).json()
+    assert len(incidents) == 1
+    # Backdate the existing incident past the cooldown window — a real gap in
+    # wall-clock time between two real incidents.
+    incident = db_session.get(Incident, uuid.UUID(incidents[0]["id"]))
+    incident.created_at = datetime.now(timezone.utc) - timedelta(seconds=301)
+    db_session.commit()
+
+    assert _post_gate_jump().status_code == 201
+    incidents = client.get("/api/incidents", headers=auth_headers(token)).json()
+    assert len(incidents) == 2, "a genuinely new gate-jump after the cooldown has elapsed must still create an incident"
+
+
+def test_gate_jumping_cooldown_zero_disables_throttling(client, db_session, admin_user, tenant):
+    from app.api.routes.video_intelligence import _get_or_create_settings
+
+    token = login(client, admin_user.email)
+    cam = client.post("/api/cameras", json={"name": "Perimeter", "source_type": "SIMULATED"}, headers=auth_headers(token)).json()
+    settings = _get_or_create_settings(db_session, tenant.id)
+    settings.incident_cooldown_seconds = 0
+    db_session.commit()
+
+    def _post_gate_jump():
+        return client.post(
+            "/api/events",
+            json={
+                "camera_id": cam["id"], "event_type": "GATE_JUMPING_DETECTED", "severity": "HIGH",
+                "occurred_at": datetime.now(timezone.utc).isoformat(),
+                "event_metadata": {"direction": "ENTERING", "tracking_id": 1, "confidence": 0.82},
+            },
+            headers=INTERNAL_HEADERS,
+        )
+
+    assert _post_gate_jump().status_code == 201
+    assert _post_gate_jump().status_code == 201
+
+    incidents = client.get("/api/incidents", headers=auth_headers(token)).json()
+    assert len(incidents) == 2
+
+
+def test_incident_cooldown_is_scoped_per_incident_type(client, db_session, admin_user, tenant):
+    """A genuinely different incident TYPE on the same camera (e.g. restricted-area
+    right after a gate-jump) must not be suppressed by the other's recent incident."""
+    from app.api.routes.video_intelligence import _get_or_create_settings
+
+    token = login(client, admin_user.email)
+    cam = client.post("/api/cameras", json={"name": "Perimeter", "source_type": "SIMULATED"}, headers=auth_headers(token)).json()
+    settings = _get_or_create_settings(db_session, tenant.id)
+    settings.incident_cooldown_seconds = 300
+    db_session.commit()
+
+    def _post(event_type):
+        return client.post(
+            "/api/events",
+            json={
+                "camera_id": cam["id"], "event_type": event_type, "severity": "HIGH",
+                "occurred_at": datetime.now(timezone.utc).isoformat(),
+                "event_metadata": {"tracking_id": 1, "confidence": 0.82, "threshold_seconds": 10},
+            },
+            headers=INTERNAL_HEADERS,
+        )
+
+    assert _post("GATE_JUMPING_DETECTED").status_code == 201
+    assert _post("RESTRICTED_AREA_VIOLATION").status_code == 201
+
+    incidents = client.get("/api/incidents", headers=auth_headers(token)).json()
+    assert len(incidents) == 2
 
 
 def test_tailgating_creates_incident_with_a_recognized_person(client, db_session, admin_user, tenant):

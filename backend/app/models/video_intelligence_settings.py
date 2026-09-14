@@ -27,3 +27,13 @@ class VideoIntelligenceSettings(Base, UUIDPKMixin, TimestampMixin, TenantScopedM
     # — independent of any per-rule time window an admin configures in the rule builder.
     business_hours_start: Mapped[str] = mapped_column(String(5), default="07:00", nullable=False)
     business_hours_end: Mapped[str] = mapped_column(String(5), default="18:00", nullable=False)
+    # Real bug found live on the deployed VM: violation_service.py's always-incident
+    # dispatch (GATE_JUMPING_DETECTED/TAILGATING_DETECTED/RESTRICTED_AREA_VIOLATION/
+    # POTENTIAL_THEFT_DETECTED) created a brand-new Incident every single time one of
+    # those event types fired, with no throttling of its own — the same gap
+    # AIRule.cooldown_seconds fixed for Alerts, one layer up. A looping test video
+    # replaying the same gate-jump content every loop pass produced a new Incident
+    # every time the underlying event's own (already-cooled-down) tripwire check fired.
+    # Scoped per (camera, incident_type) in violation_service.py — a genuinely
+    # different incident TYPE on the same camera still gets its own Incident.
+    incident_cooldown_seconds: Mapped[int] = mapped_column(Integer, default=300, nullable=False)

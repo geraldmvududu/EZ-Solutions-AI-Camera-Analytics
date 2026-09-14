@@ -33,7 +33,7 @@ evidence rather than treat the correlation as confirmed proof (spec section 18's
 """
 
 import uuid
-from datetime import datetime, time
+from datetime import datetime, time, timedelta, timezone
 
 from sqlalchemy.orm import Session
 
@@ -169,10 +169,31 @@ def _build_always_incident_description(event: Event, camera: Camera, person: Per
     )
 
 
+def _recently_had_incident(db: Session, camera_id, incident_type: str, cooldown_seconds: int) -> bool:
+    """Real bug found live on the deployed VM: the always-incident dispatch below
+    created a brand-new Incident every single time its triggering event type fired,
+    with no throttling of its own — a looping test video replaying the same gate-jump
+    content every loop pass produced a new Incident every ~30-90s indefinitely.
+    Scoped per (camera, incident_type) — a genuinely different incident TYPE on the
+    same camera (e.g. a real theft alongside an unrelated gate-jump) still gets its
+    own Incident; cooldown_seconds<=0 is a real, supported opt-out."""
+    if cooldown_seconds <= 0:
+        return False
+    cutoff = datetime.now(timezone.utc) - timedelta(seconds=cooldown_seconds)
+    return (
+        db.query(Incident)
+        .filter(Incident.camera_id == camera_id, Incident.incident_type == incident_type, Incident.created_at >= cutoff)
+        .first()
+        is not None
+    )
+
+
 def _maybe_create_always_incident(db: Session, event: Event, alerts: list[Alert], camera: Camera) -> Incident | None:
     from app.api.routes.video_intelligence import _get_or_create_settings
 
     vi_settings = _get_or_create_settings(db, event.tenant_id)
+    if _recently_had_incident(db, camera.id, event.event_type.value, vi_settings.incident_cooldown_seconds):
+        return None
     person = _resolve_person(db, event)
     has_person = person is not None
 
@@ -204,8 +225,14 @@ def _maybe_create_always_incident(db: Session, event: Event, alerts: list[Alert]
 
 
 def _maybe_create_identified_person_incident(db: Session, event: Event, alerts: list[Alert], camera: Camera) -> Incident | None:
+    from app.api.routes.video_intelligence import _get_or_create_settings
+
     person = _resolve_person(db, event)
     if person is None:
+        return None
+
+    vi_settings = _get_or_create_settings(db, event.tenant_id)
+    if _recently_had_incident(db, camera.id, event.event_type.value, vi_settings.incident_cooldown_seconds):
         return None
 
     confidence = event.event_metadata.get("person_recognition_confidence")

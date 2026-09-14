@@ -625,7 +625,7 @@ cd ai-engine && python -m app.main
 ## Testing commands
 
 ```bash
-cd backend && pytest -q      # 229 tests: auth, RBAC, tenant isolation, camera CRUD
+cd backend && pytest -q      # 233 tests: auth, RBAC, tenant isolation, camera CRUD
                               # (including the delete cascade covering every dependent
                               # table), credential encryption, rule engine, analytics
                               # aggregates, report export, the Redis-backed rate limiter
@@ -704,7 +704,16 @@ cd backend && pytest -q      # 229 tests: auth, RBAC, tenant isolation, camera C
                               # creates one, cooldown_seconds=0 genuinely disables
                               # throttling, and the cooldown is scoped per (rule,
                               # camera) so a camera-agnostic rule matching a different
-                              # camera isn't wrongly suppressed)
+                              # camera isn't wrongly suppressed), and the matching
+                              # Incident-level cooldown fix in violation_service.py
+                              # (a second GATE_JUMPING_DETECTED within the window
+                              # creates no second Incident even though the event
+                              # itself still gets created, a match after the window
+                              # expires still creates one, cooldown_seconds=0
+                              # disables throttling, and it's scoped per (camera,
+                              # incident_type) so a genuinely different incident type
+                              # on the same camera — e.g. a real theft right after an
+                              # unrelated gate-jump — still gets its own Incident)
 cd ai-engine && pytest -q    # 115 tests: centroid tracker (including type-aware
                               # matching so a multi-class detector can't let a track
                               # of one object_type steal another's), zone/tripwire
@@ -1198,6 +1207,30 @@ narrowly-scoped IAM key in production — never reuse a broader-privileged crede
    limitation 27 — that one stops a redundant MOTION_DETECTED next to a PERSON_
    DETECTED at the event layer; this one stops a rule from re-alerting on the SAME
    rule+camera repeatedly, regardless of which event type it's configured to match.
+29. **`VideoIntelligenceSettings.incident_cooldown_seconds` (default 300s) — the same
+   gap as limitation 28, one layer over**: `violation_service.py`'s always-incident
+   dispatch (GATE_JUMPING_DETECTED/TAILGATING_DETECTED/RESTRICTED_AREA_VIOLATION/
+   POTENTIAL_THEFT_DETECTED, plus the identified-person path) created a brand-new
+   Incident every single time its triggering event fired, with no cooldown of its
+   own — on the same looping test camera already documented in limitations 16/27/28,
+   this produced a new Incident every ~30-90s indefinitely (the same event-level
+   cooldown that gates GATE_JUMPING_DETECTED itself, TRIPWIRE_VIOLATION_COOLDOWN_
+   SECONDS, was the only thing limiting the rate — nothing stopped the SAME
+   underlying content from generating a fresh case file every time it repeated).
+   Fixed with a per-(camera, incident_type) cooldown, mirroring AIRule.cooldown_
+   seconds exactly — `cooldown_seconds<=0` opts out. **Real investigation, not
+   assumed**: the user also asked whether Recordings/Snapshots/Detections had the
+   same duplication problem. Checked directly against the live deployed VM's data
+   (`GROUP BY file_path HAVING COUNT(*) > 1` for recordings/snapshots, and `GROUP BY
+   camera_id, tracking_id, detected_at, bbox_x, bbox_y HAVING COUNT(*) > 1` for
+   detections) — all three came back with zero real duplicate rows. Recordings and
+   Snapshots already had genuine content-based protection from earlier fixes in this
+   same session (`POST_TRIGGER_RECORD_SECONDS`'s 30s gap-merge, and the aHash
+   snapshot dedup — limitations 23 and 25); Detections are an intentional dense
+   per-frame trajectory log by design (one real row per tracked object per AI-sampled
+   frame), not something that should be deduplicated without losing their actual
+   purpose. Nothing new was built for those three — confirmed already correct rather
+   than assumed to be, or "fixed" with an unneeded mechanism.
 
 ## Current implementation status
 

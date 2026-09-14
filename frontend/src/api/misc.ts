@@ -116,6 +116,7 @@ export interface VideoIntelligenceSettings {
   post_event_seconds: number;
   business_hours_start: string;
   business_hours_end: string;
+  incident_cooldown_seconds: number;
 }
 
 export const getVideoIntelligenceSettings = () => apiRequest<VideoIntelligenceSettings>("/api/video-intelligence-settings");

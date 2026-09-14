@@ -82,6 +82,26 @@ export function VideoIntelligenceSettingsPage() {
         </div>
 
         <div className="rounded-lg border border-base-700 bg-base-900 p-4 space-y-3">
+          <div className="font-semibold text-slate-200 text-sm">Incident cooldown</div>
+          <div>
+            <label className="block text-xs text-slate-400 mb-1">Minimum seconds between incidents (per camera + incident type)</label>
+            <input
+              type="number"
+              min={0}
+              value={settings.incident_cooldown_seconds}
+              onChange={(e) => setSettings({ ...settings, incident_cooldown_seconds: Number(e.target.value) })}
+              className="w-full rounded bg-base-800 border border-base-600 px-2 py-1.5 text-sm text-slate-100"
+            />
+          </div>
+          <p className="text-xs text-slate-500">
+            While the same camera keeps triggering the same incident type (e.g. gate-jumping repeating on a looping
+            test video), no more than one new Incident is created per this many seconds — a genuinely different
+            incident type on the same camera is never suppressed by this. Set to 0 to create an Incident on every
+            single detection, with no throttling.
+          </p>
+        </div>
+
+        <div className="rounded-lg border border-base-700 bg-base-900 p-4 space-y-3">
           <div className="font-semibold text-slate-200 text-sm">Evidence clips</div>
           <div className="grid grid-cols-2 gap-3">
             <div>
