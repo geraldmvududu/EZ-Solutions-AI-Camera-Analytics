@@ -676,7 +676,7 @@ cd ai-engine && pytest -q    # 95 tests: centroid tracker (including type-aware
                               # swallowed, and two DIFFERENT tripwires crossed by the
                               # same movement must each still get their own event —
                               # cooldowns are independent per tripwire, not global)
-cd worker && pytest -q       # 16 tests: retention cleanup for recordings/snapshots/
+cd worker && pytest -q       # 21 tests: retention cleanup for recordings/snapshots/
                               # face-recognition-events/face-profiles against a real
                               # SQLite DB with a hand-crafted minimal schema (the
                               # service's first-ever tests), plus
@@ -686,7 +686,13 @@ cd worker && pytest -q       # 16 tests: retention cleanup for recordings/snapsh
                               # removing the row — the FK-safe nulling of live Event/
                               # Detection/Incident references before a delete, never
                               # purging an Event still referenced by an Alert or
-                              # FaceRecognitionEvent, and per-tenant tier isolation)
+                              # FaceRecognitionEvent, and per-tenant tier isolation),
+                              # and the real cleanup_orphaned_media_files bug fix found
+                              # live during a disk-full incident (a file with no
+                              # referencing recordings/snapshots row at all is removed,
+                              # one referenced by either table is kept, anything younger
+                              # than the grace period is left alone even with no
+                              # referencing row, and missing directories don't crash it)
 cd frontend && npm run build # TypeScript strict-mode compile + production bundle
 ```
 
@@ -1395,3 +1401,42 @@ narrowly-scoped IAM key in production — never reuse a broader-privileged crede
      reported people need to be re-enrolled through the UI with a new photo — there is
      nothing left to fix in code for them.
   `cd backend && pytest -q` (215) and `cd ai-engine && pytest -q` (95) both green.
+- **A real production outage on the deployed VM, root-caused and fixed live**: the
+  user reported `/dashboard` "not working." The actual chain: the VM's root filesystem
+  was at 100% (`df -h /` showed 0 bytes available), which made Postgres PANIC mid-crash-
+  recovery (`could not write to file "pg_logical/replorigin_checkpoint.tmp": No space
+  left on device`) and enter a genuine crash-restart loop, which in turn made
+  `POST /api/auth/refresh` return `500` and every dashboard API call `401`/fail — and
+  separately made nginx itself throw `mkdir() ... failed (28: No space left on device)`
+  trying to buffer the frontend's JS bundle, so even the static asset request failed.
+  Freed disk in order of safety/certainty: `docker builder prune -af` (3.55GB, pure
+  build cache, zero data loss) got Postgres enough room to finish its checkpoint and
+  come back healthy on its own; then found and removed real, **zero-reference**
+  leftover files — two directories under `data/recordings`/`data/snapshots` named by
+  camera IDs that no longer exist in the `cameras` table at all (confirmed via
+  `SELECT id FROM cameras` before deleting anything), and, the single largest item, one
+  **3.26GB** recording file whose name didn't match any `recordings.file_path` row in
+  the database (confirmed with a targeted `SELECT` before deletion) — together these
+  freed the VM from 100% to 79% used. Root cause for why these existed at all:
+  `delete_camera` (see the camera-delete-cascade entries above) DOES already clean up
+  its own local files after commit, but only for the rows it queried before deleting —
+  a camera's ai-engine worker that's still actively writing/registering a new
+  recording in the same window the camera row gets deleted can create a row+file that
+  delete_camera's file-cleanup loop never saw; separately, a `SegmentRecorder` ffmpeg
+  transcode killed mid-write by this SAME disk-full crash (not disk-full itself — a
+  local recording that was never registered via `POST /api/recordings` in the first
+  place, for reasons not fully traced) left one large local file with literally no
+  database row ever pointing at it. Rather than patch each individual cause (a
+  narrower fix would leave the next not-yet-discovered one to eventually refill the
+  disk again), added `worker/app.py::cleanup_orphaned_media_files` — a new pass in the
+  existing hourly retention loop that walks `/data/recordings`/`/data/snapshots`
+  directly and removes any file not referenced by any `recordings.file_path`/
+  `snapshots.file_path` row (skipping anything younger than a 1-hour grace period, so
+  a file whose registering POST just hasn't landed yet is never touched). Verified via
+  `worker/tests/test_app.py`: an unreferenced file past the grace period is removed, a
+  file referenced by either table is kept, a fresh unreferenced file within the grace
+  period is left alone, and missing directories don't crash the pass. `cd worker &&
+  pytest -q` (21) green. Deployed live and confirmed stable afterward: Postgres
+  `healthy`, backend `healthy`, `/dashboard` returns real data again, and TRIPWIRE_
+  VIOLATION event volume for the post-fix period stayed at the expected ~1-per-25s
+  cadence with no other event type showing runaway duplication.

@@ -7,6 +7,8 @@ cleanup_recordings/cleanup_snapshots are NOT tested here — they still use Post
 `::interval` syntax and this service has never had a test suite before this file, so
 that's a pre-existing gap, not a regression introduced now."""
 
+import os
+import time
 import uuid
 from datetime import datetime, timedelta, timezone
 
@@ -472,3 +474,82 @@ def test_cleanup_face_profiles_handles_missing_file_gracefully(db, tmp_path):
     with db.begin() as conn:
         remaining = {row.id for row in conn.execute(text("SELECT id FROM face_profiles"))}
     assert profile_id not in remaining
+
+
+def _backdate(path, seconds_ago: float) -> None:
+    old = time.time() - seconds_ago
+    os.utime(path, (old, old))
+
+
+@pytest.fixture
+def media_roots(tmp_path, monkeypatch):
+    recordings_root = tmp_path / "recordings"
+    snapshots_root = tmp_path / "snapshots"
+    recordings_root.mkdir()
+    snapshots_root.mkdir()
+    monkeypatch.setattr(worker_app, "RECORDINGS_ROOT", str(recordings_root))
+    monkeypatch.setattr(worker_app, "SNAPSHOTS_ROOT", str(snapshots_root))
+    return recordings_root, snapshots_root
+
+
+def test_cleanup_orphaned_media_files_removes_a_file_with_no_referencing_row(db, media_roots):
+    recordings_root, _ = media_roots
+    orphan = recordings_root / "1789318064_eb3d016d.mp4"
+    orphan.write_bytes(b"leftover video")
+    _backdate(orphan, worker_app.ORPHAN_FILE_GRACE_PERIOD_SECONDS + 60)
+
+    worker_app.cleanup_orphaned_media_files()
+
+    assert not orphan.exists()
+
+
+def test_cleanup_orphaned_media_files_keeps_a_file_referenced_by_a_recording_row(db, media_roots):
+    recordings_root, _ = media_roots
+    kept = recordings_root / "referenced.mp4"
+    kept.write_bytes(b"real recording")
+    _backdate(kept, worker_app.ORPHAN_FILE_GRACE_PERIOD_SECONDS + 60)
+    with db.begin() as conn:
+        conn.execute(
+            text("INSERT INTO recordings (id, tenant_id, file_path, started_at, is_protected) VALUES (:id, :t, :p, :d, 0)"),
+            {"id": _uid(), "t": _uid(), "p": str(kept), "d": datetime.now(timezone.utc)},
+        )
+
+    worker_app.cleanup_orphaned_media_files()
+
+    assert kept.exists()
+
+
+def test_cleanup_orphaned_media_files_keeps_a_file_referenced_by_a_snapshot_row(db, media_roots):
+    _, snapshots_root = media_roots
+    kept = snapshots_root / "referenced.jpg"
+    kept.write_bytes(b"real snapshot")
+    _backdate(kept, worker_app.ORPHAN_FILE_GRACE_PERIOD_SECONDS + 60)
+    with db.begin() as conn:
+        conn.execute(
+            text("INSERT INTO snapshots (id, tenant_id, file_path, taken_at) VALUES (:id, :t, :p, :d)"),
+            {"id": _uid(), "t": _uid(), "p": str(kept), "d": datetime.now(timezone.utc)},
+        )
+
+    worker_app.cleanup_orphaned_media_files()
+
+    assert kept.exists()
+
+
+def test_cleanup_orphaned_media_files_skips_files_within_the_grace_period(db, media_roots):
+    """A file this fresh might just be one whose registering POST hasn't landed in the
+    database yet — deleting it out from under an in-progress write would be worse than
+    leaving a real orphan alone for one more retention cycle."""
+    recordings_root, _ = media_roots
+    fresh = recordings_root / "just_written.mp4"
+    fresh.write_bytes(b"still being reported to the backend")
+
+    worker_app.cleanup_orphaned_media_files()
+
+    assert fresh.exists()
+
+
+def test_cleanup_orphaned_media_files_handles_missing_directories_gracefully(db, monkeypatch, tmp_path):
+    monkeypatch.setattr(worker_app, "RECORDINGS_ROOT", str(tmp_path / "does-not-exist-recordings"))
+    monkeypatch.setattr(worker_app, "SNAPSHOTS_ROOT", str(tmp_path / "does-not-exist-snapshots"))
+
+    worker_app.cleanup_orphaned_media_files()  # must not raise

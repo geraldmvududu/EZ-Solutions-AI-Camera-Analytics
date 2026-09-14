@@ -35,6 +35,17 @@ logger = logging.getLogger("worker")
 
 DATABASE_URL = os.environ.get("DATABASE_URL", "postgresql+psycopg://ezsolutions:change_me@postgres:5432/ez_camera_analytics")
 RUN_INTERVAL_SECONDS = int(os.environ.get("RETENTION_CHECK_INTERVAL_SECONDS", "3600"))
+RECORDINGS_ROOT = os.environ.get("RECORDINGS_PATH", "/data/recordings")
+SNAPSHOTS_ROOT = os.environ.get("SNAPSHOTS_PATH", "/data/snapshots")
+# Real incident on the deployed VM: a camera-delete race (its ai-engine worker was
+# still writing/registering a recording in the moment the camera row was deleted) and
+# a transcode process killed mid-write during an unrelated disk-full crash both left
+# real files with no referencing database row at all — see
+# cleanup_orphaned_media_files' own docstring below. Anything younger than this is
+# left alone, since a file this fresh may just be one whose registering POST hasn't
+# landed in the database yet (save_snapshot/SegmentRecorder write the file first,
+# then report it) rather than a genuine orphan.
+ORPHAN_FILE_GRACE_PERIOD_SECONDS = 3600
 
 engine = create_engine(DATABASE_URL, pool_pre_ping=True)
 
@@ -320,6 +331,52 @@ def cleanup_expired_cloud_evidence() -> None:
             )
 
 
+def cleanup_orphaned_media_files() -> None:
+    """Real incident found live on the deployed VM: the disk filled up completely
+    (Postgres itself PANICs and refuses to even finish crash recovery once its own
+    volume has zero bytes free — that's what actually took the whole app down, not a
+    code regression) and a chunk of the usage traced back to real files on disk with
+    NO referencing recordings/snapshots row at all — invisible to
+    cleanup_recordings/cleanup_snapshots above, since those only ever look at rows
+    that DO exist. Two known causes, found by hand while recovering this incident:
+    (1) a camera-delete race — the camera's ai-engine worker kept writing/registering
+    a recording for a few seconds after its own camera row (and the recording rows
+    delete_camera cleans up) was already gone, so the new row+file were created and
+    then orphaned entirely outside delete_camera's view; one deleted camera's
+    directory alone held 420MB this way. (2) a local recording file whose SegmentRecorder
+    ffmpeg transcode was killed mid-write by the SAME disk-full crash before its except
+    block could clean up the partial output — a single one of these held 3.26GB. Rather
+    than chase every individual way an orphan can arise, this walks the two real media
+    directories directly (this service already has no ORM models to join against — same
+    plain-SQL convention as everything else here) and removes any file whose exact path
+    isn't referenced by any recordings.file_path/snapshots.file_path row, skipping
+    anything modified within the grace period so an in-flight write is never touched."""
+    with engine.begin() as conn:
+        known_recording_paths = {row[0] for row in conn.execute(text("SELECT file_path FROM recordings")).fetchall() if row[0]}
+        known_snapshot_paths = {row[0] for row in conn.execute(text("SELECT file_path FROM snapshots")).fetchall() if row[0]}
+
+    now = time.time()
+    removed = 0
+    for root, known_paths in ((RECORDINGS_ROOT, known_recording_paths), (SNAPSHOTS_ROOT, known_snapshot_paths)):
+        if not os.path.isdir(root):
+            continue
+        for dirpath, _dirnames, filenames in os.walk(root):
+            for name in filenames:
+                path = os.path.join(dirpath, name)
+                if path in known_paths:
+                    continue
+                try:
+                    if now - os.path.getmtime(path) < ORPHAN_FILE_GRACE_PERIOD_SECONDS:
+                        continue
+                    os.remove(path)
+                    removed += 1
+                except OSError as exc:
+                    logger.warning("Could not remove orphaned media file %s: %s", path, exc)
+
+    if removed:
+        logger.info("Removed %d orphaned media file(s) with no referencing database row", removed)
+
+
 def main() -> None:
     logger.info("Retention worker starting — checking every %ds", RUN_INTERVAL_SECONDS)
     while True:
@@ -329,6 +386,7 @@ def main() -> None:
             cleanup_face_recognition_events()
             cleanup_face_profiles()
             cleanup_expired_cloud_evidence()
+            cleanup_orphaned_media_files()
         except Exception:
             logger.exception("Retention pass failed")
         time.sleep(RUN_INTERVAL_SECONDS)
