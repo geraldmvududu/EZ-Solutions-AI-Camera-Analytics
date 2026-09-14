@@ -4,6 +4,10 @@ theft/behavior classifier. See CLAUDE.md 'Known limitations' for exactly what th
 does and does not detect.
 """
 
+import logging
+
+logger = logging.getLogger("ai-engine.object_tracking")
+
 
 class AssetZoneTracker:
     """Tracks how long each (track_id, zone_id) pair has continuously been observed
@@ -26,12 +30,27 @@ class AssetZoneTracker:
         self._entered_at: dict[tuple[int, str], float] = {}
 
     def observe(self, track_id: int, zone_id: str, inside: bool, threshold_seconds: int, now: float) -> bool:
+        # Real, honest instrumentation — this heuristic has never been exercised
+        # against a real object before, and worker.py has no success/failure log of
+        # its own for the event it creates (see backend_client.py — only failed POSTs
+        # are logged). Without this, "why didn't a real bag removal get flagged"
+        # would be as undebuggable from the outside as the face-recognition quality
+        # gate was before it got the same treatment.
         key = (track_id, zone_id)
         if inside:
+            if key not in self._entered_at:
+                logger.info("Zone %s: track %s entered the asset zone — dwell timer started", zone_id, track_id)
             self._entered_at.setdefault(key, now)
             return False
 
         entered_at = self._entered_at.pop(key, None)
         if entered_at is None:
             return False
-        return (now - entered_at) >= threshold_seconds
+        dwell = now - entered_at
+        fired = dwell >= threshold_seconds
+        logger.info(
+            "Zone %s: track %s left the asset zone after %.1fs (threshold %ds) — %s",
+            zone_id, track_id, dwell, threshold_seconds,
+            "flagging as POTENTIAL_THEFT_DETECTED" if fired else "not flagged, dwell was too short",
+        )
+        return fired

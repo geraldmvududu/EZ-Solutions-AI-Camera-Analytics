@@ -1,6 +1,22 @@
 from app.core.object_tracking import AssetZoneTracker
 
 
+def test_logs_the_real_dwell_time_and_outcome_on_exit(caplog):
+    tracker = AssetZoneTracker()
+    with caplog.at_level("INFO", logger="ai-engine.object_tracking"):
+        tracker.observe(track_id=1, zone_id="z1", inside=True, threshold_seconds=10, now=0.0)
+        tracker.observe(track_id=1, zone_id="z1", inside=False, threshold_seconds=10, now=3.0)
+    assert "entered the asset zone" in caplog.text
+    assert "not flagged, dwell was too short" in caplog.text
+
+    caplog.clear()
+    with caplog.at_level("INFO", logger="ai-engine.object_tracking"):
+        tracker.observe(track_id=2, zone_id="z1", inside=True, threshold_seconds=10, now=0.0)
+        fired = tracker.observe(track_id=2, zone_id="z1", inside=False, threshold_seconds=10, now=15.0)
+    assert fired is True
+    assert "flagging as POTENTIAL_THEFT_DETECTED" in caplog.text
+
+
 def test_exit_before_threshold_does_not_fire():
     tracker = AssetZoneTracker()
     tracker.observe(track_id=1, zone_id="z1", inside=True, threshold_seconds=10, now=0.0)
