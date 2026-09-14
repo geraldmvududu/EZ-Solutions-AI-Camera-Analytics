@@ -9,21 +9,32 @@ import { ApiError } from "../api/client";
 
 const SOURCE_TYPES: CameraSourceType[] = ["VIDEO_FILE", "SIMULATED", "WEBCAM", "RTSP", "HTTP_MJPEG", "IP_CAMERA"];
 
-function CameraFormModal({ sites, onClose, onCreated }: { sites: Site[]; onClose: () => void; onCreated: () => void }) {
-  const [name, setName] = useState("");
-  const [location, setLocation] = useState("");
-  const [sourceType, setSourceType] = useState<CameraSourceType>("SIMULATED");
-  const [videoFilePath, setVideoFilePath] = useState("");
+function CameraFormModal({
+  sites,
+  camera,
+  onClose,
+  onSaved,
+}: {
+  sites: Site[];
+  camera?: Camera | null;
+  onClose: () => void;
+  onSaved: () => void;
+}) {
+  const isEdit = !!camera;
+  const [name, setName] = useState(camera?.name ?? "");
+  const [location, setLocation] = useState(camera?.location ?? "");
+  const [sourceType, setSourceType] = useState<CameraSourceType>(camera?.source_type ?? "SIMULATED");
+  const [videoFilePath, setVideoFilePath] = useState(camera?.video_file_path ?? "");
   const [streamUrl, setStreamUrl] = useState("");
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
-  const [siteId, setSiteId] = useState("");
-  const [cloudRecordingEnabled, setCloudRecordingEnabled] = useState(false);
-  const [faceRecognitionEnabled, setFaceRecognitionEnabled] = useState(false);
-  const [faceThreshold, setFaceThreshold] = useState("");
-  const [faceHoursStart, setFaceHoursStart] = useState("");
-  const [faceHoursEnd, setFaceHoursEnd] = useState("");
-  const [multiClassDetectionEnabled, setMultiClassDetectionEnabled] = useState(false);
+  const [siteId, setSiteId] = useState(camera?.site_id ?? "");
+  const [cloudRecordingEnabled, setCloudRecordingEnabled] = useState(camera?.cloud_recording_enabled ?? false);
+  const [faceRecognitionEnabled, setFaceRecognitionEnabled] = useState(camera?.face_recognition_enabled ?? false);
+  const [faceThreshold, setFaceThreshold] = useState(camera?.face_recognition_threshold?.toString() ?? "");
+  const [faceHoursStart, setFaceHoursStart] = useState(camera?.face_operating_hours_start ?? "");
+  const [faceHoursEnd, setFaceHoursEnd] = useState(camera?.face_operating_hours_end ?? "");
+  const [multiClassDetectionEnabled, setMultiClassDetectionEnabled] = useState(camera?.multi_class_detection_enabled ?? false);
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
 
@@ -32,12 +43,11 @@ function CameraFormModal({ sites, onClose, onCreated }: { sites: Site[]; onClose
     setSubmitting(true);
     setError(null);
     try {
-      await camerasApi.createCamera({
+      const payload = {
         name,
         location,
-        source_type: sourceType,
         video_file_path: sourceType === "VIDEO_FILE" ? videoFilePath : undefined,
-        stream_url: ["RTSP", "HTTP_MJPEG", "IP_CAMERA"].includes(sourceType) ? streamUrl : undefined,
+        stream_url: ["RTSP", "HTTP_MJPEG", "IP_CAMERA"].includes(sourceType) ? streamUrl || undefined : undefined,
         username: username || undefined,
         password: password || undefined,
         site_id: siteId || null,
@@ -47,11 +57,16 @@ function CameraFormModal({ sites, onClose, onCreated }: { sites: Site[]; onClose
         face_operating_hours_start: faceHoursStart || undefined,
         face_operating_hours_end: faceHoursEnd || undefined,
         multi_class_detection_enabled: multiClassDetectionEnabled,
-      });
-      onCreated();
+      };
+      if (isEdit && camera) {
+        await camerasApi.updateCamera(camera.id, payload);
+      } else {
+        await camerasApi.createCamera({ ...payload, source_type: sourceType });
+      }
+      onSaved();
       onClose();
     } catch (err) {
-      setError(err instanceof ApiError ? err.message : "Failed to create camera");
+      setError(err instanceof ApiError ? err.message : `Failed to ${isEdit ? "save" : "create"} camera`);
     } finally {
       setSubmitting(false);
     }
@@ -60,7 +75,7 @@ function CameraFormModal({ sites, onClose, onCreated }: { sites: Site[]; onClose
   return (
     <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4">
       <form onSubmit={handleSubmit} className="bg-base-900 border border-base-700 rounded-lg w-full max-w-md p-5 space-y-3">
-        <h3 className="font-semibold text-slate-100 mb-2">Add Camera</h3>
+        <h3 className="font-semibold text-slate-100 mb-2">{isEdit ? `Edit Camera — ${camera?.name}` : "Add Camera"}</h3>
         {error && <div className="text-sm text-severity-critical">{error}</div>}
 
         <div>
@@ -72,14 +87,18 @@ function CameraFormModal({ sites, onClose, onCreated }: { sites: Site[]; onClose
           <input value={location} onChange={(e) => setLocation(e.target.value)} className="w-full rounded bg-base-800 border border-base-600 px-3 py-1.5 text-sm text-slate-100" />
         </div>
         <div>
-          <label className="block text-xs text-slate-400 mb-1">Source Type</label>
-          <select value={sourceType} onChange={(e) => setSourceType(e.target.value as CameraSourceType)} className="w-full rounded bg-base-800 border border-base-600 px-3 py-1.5 text-sm text-slate-100">
-            {SOURCE_TYPES.map((t) => (
-              <option key={t} value={t}>
-                {t.replace(/_/g, " ")}
-              </option>
-            ))}
-          </select>
+          <label className="block text-xs text-slate-400 mb-1">Source Type{isEdit && " (cannot be changed after creation)"}</label>
+          {isEdit ? (
+            <div className="w-full rounded bg-base-800 border border-base-600 px-3 py-1.5 text-sm text-slate-400">{sourceType.replace(/_/g, " ")}</div>
+          ) : (
+            <select value={sourceType} onChange={(e) => setSourceType(e.target.value as CameraSourceType)} className="w-full rounded bg-base-800 border border-base-600 px-3 py-1.5 text-sm text-slate-100">
+              {SOURCE_TYPES.map((t) => (
+                <option key={t} value={t}>
+                  {t.replace(/_/g, " ")}
+                </option>
+              ))}
+            </select>
+          )}
         </div>
 
         {sourceType === "VIDEO_FILE" && (
@@ -92,17 +111,17 @@ function CameraFormModal({ sites, onClose, onCreated }: { sites: Site[]; onClose
         {["RTSP", "HTTP_MJPEG", "IP_CAMERA"].includes(sourceType) && (
           <>
             <div>
-              <label className="block text-xs text-slate-400 mb-1">Stream URL</label>
-              <input value={streamUrl} onChange={(e) => setStreamUrl(e.target.value)} placeholder="rtsp://host:554/stream" className="w-full rounded bg-base-800 border border-base-600 px-3 py-1.5 text-sm text-slate-100" />
+              <label className="block text-xs text-slate-400 mb-1">Stream URL{isEdit && " (leave blank to keep current)"}</label>
+              <input value={streamUrl} onChange={(e) => setStreamUrl(e.target.value)} placeholder={isEdit ? "unchanged" : "rtsp://host:554/stream"} className="w-full rounded bg-base-800 border border-base-600 px-3 py-1.5 text-sm text-slate-100" />
             </div>
             <div className="grid grid-cols-2 gap-2">
               <div>
-                <label className="block text-xs text-slate-400 mb-1">Username</label>
-                <input value={username} onChange={(e) => setUsername(e.target.value)} className="w-full rounded bg-base-800 border border-base-600 px-3 py-1.5 text-sm text-slate-100" />
+                <label className="block text-xs text-slate-400 mb-1">Username{isEdit && " (blank = unchanged)"}</label>
+                <input value={username} onChange={(e) => setUsername(e.target.value)} placeholder={isEdit ? "unchanged" : ""} className="w-full rounded bg-base-800 border border-base-600 px-3 py-1.5 text-sm text-slate-100" />
               </div>
               <div>
-                <label className="block text-xs text-slate-400 mb-1">Password</label>
-                <input type="password" value={password} onChange={(e) => setPassword(e.target.value)} className="w-full rounded bg-base-800 border border-base-600 px-3 py-1.5 text-sm text-slate-100" />
+                <label className="block text-xs text-slate-400 mb-1">Password{isEdit && " (blank = unchanged)"}</label>
+                <input type="password" value={password} onChange={(e) => setPassword(e.target.value)} placeholder={isEdit ? "unchanged" : ""} className="w-full rounded bg-base-800 border border-base-600 px-3 py-1.5 text-sm text-slate-100" />
               </div>
             </div>
           </>
@@ -176,7 +195,7 @@ function CameraFormModal({ sites, onClose, onCreated }: { sites: Site[]; onClose
             Cancel
           </button>
           <button type="submit" disabled={submitting} className="px-3 py-1.5 text-sm rounded bg-accent-600 hover:bg-accent-500 text-white disabled:opacity-50">
-            {submitting ? "Creating..." : "Create Camera"}
+            {submitting ? "Saving..." : isEdit ? "Save Changes" : "Create Camera"}
           </button>
         </div>
       </form>
@@ -188,6 +207,7 @@ export function CamerasPage() {
   const [cameras, setCameras] = useState<Camera[]>([]);
   const [sites, setSites] = useState<Site[]>([]);
   const [showModal, setShowModal] = useState(false);
+  const [editTarget, setEditTarget] = useState<Camera | null>(null);
   const [testResults, setTestResults] = useState<Record<string, string>>({});
   const [error, setError] = useState<string | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<Camera | null>(null);
@@ -285,6 +305,9 @@ export function CamerasPage() {
                     <button onClick={() => handleTest(cam.id)} className="text-accent-500 hover:underline text-xs">
                       Test
                     </button>
+                    <button onClick={() => setEditTarget(cam)} className="text-accent-500 hover:underline text-xs">
+                      Edit
+                    </button>
                     <button onClick={() => setDeleteTarget(cam)} className="text-severity-critical hover:underline text-xs">
                       Delete
                     </button>
@@ -304,7 +327,11 @@ export function CamerasPage() {
         </table>
       </div>
 
-      {showModal && <CameraFormModal sites={sites} onClose={() => setShowModal(false)} onCreated={load} />}
+      {showModal && <CameraFormModal sites={sites} onClose={() => setShowModal(false)} onSaved={load} />}
+
+      {editTarget && (
+        <CameraFormModal sites={sites} camera={editTarget} onClose={() => setEditTarget(null)} onSaved={load} />
+      )}
 
       {deleteTarget && (
         <ConfirmDialog
