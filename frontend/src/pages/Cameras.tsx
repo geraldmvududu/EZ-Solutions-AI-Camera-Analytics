@@ -25,6 +25,7 @@ function CameraFormModal({
   const [location, setLocation] = useState(camera?.location ?? "");
   const [sourceType, setSourceType] = useState<CameraSourceType>(camera?.source_type ?? "SIMULATED");
   const [videoFilePath, setVideoFilePath] = useState(camera?.video_file_path ?? "");
+  const [loopVideo, setLoopVideo] = useState(camera?.loop_video ?? true);
   const [streamUrl, setStreamUrl] = useState("");
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
@@ -63,6 +64,7 @@ function CameraFormModal({
         name,
         location,
         video_file_path: sourceType === "VIDEO_FILE" ? videoFilePath : undefined,
+        loop_video: sourceType === "VIDEO_FILE" ? loopVideo : undefined,
         stream_url: ["RTSP", "HTTP_MJPEG", "IP_CAMERA"].includes(sourceType) ? streamUrl || undefined : undefined,
         username: username || undefined,
         password: password || undefined,
@@ -136,6 +138,22 @@ function CameraFormModal({
             <div>
               <label className="block text-xs text-slate-400 mb-1">Or enter a path already on the server (e.g. /data/uploads/front_gate.mp4)</label>
               <input value={videoFilePath} onChange={(e) => setVideoFilePath(e.target.value)} className="w-full rounded bg-base-800 border border-base-600 px-3 py-1.5 text-sm text-slate-100" />
+            </div>
+            <div>
+              <label className="flex items-center gap-2 text-sm text-slate-300">
+                <input type="checkbox" checked={loopVideo} onChange={(e) => setLoopVideo(e.target.checked)} />
+                Loop this video continuously
+              </label>
+              <p className="text-xs text-slate-500 mt-1">
+                {loopVideo
+                  ? "Replays forever, as if this were a live camera — good for ongoing testing, but the same footage gets re-analyzed and can produce repeated events for the same content every loop."
+                  : "Plays through once, then stops and marks the camera inactive — no more analysis, no more events from this footage. Right for reviewing a fixed clip (e.g. external-drive footage) exactly once."}
+              </p>
+              {isEdit && camera?.video_processed_at && (
+                <p className="text-xs text-accent-500 mt-1">
+                  Already processed on {new Date(camera.video_processed_at).toLocaleString()} — this camera is now inactive.
+                </p>
+              )}
             </div>
           </div>
         )}
@@ -327,6 +345,7 @@ export function CamerasPage() {
                 <td className="px-4 py-2 text-slate-400">{cam.source_type.replace(/_/g, " ")}</td>
                 <td className="px-4 py-2">
                   <StatusBadge status={cam.status} />
+                  {cam.video_processed_at && <div className="text-xs text-accent-500 mt-0.5">Processed</div>}
                 </td>
                 <td className="px-4 py-2 text-slate-400">{cam.ai_enabled ? "ON" : "OFF"}</td>
                 <td className="px-4 py-2 text-slate-400">{cam.recording_enabled ? "ON" : "OFF"}</td>

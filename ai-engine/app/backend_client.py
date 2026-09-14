@@ -57,6 +57,14 @@ class BackendClient:
     def heartbeat(self, camera_id: str) -> None:
         self._safe_post(f"/api/cameras/{camera_id}/heartbeat", {})
 
+    def mark_video_processed(self, camera_id: str) -> None:
+        """Called once by worker.py when a VIDEO_FILE camera with loop_video=False
+        reaches real end-of-file — see Camera.video_processed_at's own docstring in
+        the backend for why this exists (stopping a finite video from being
+        re-analyzed forever, which was producing genuinely "new" events every loop
+        pass)."""
+        self._safe_post(f"/api/cameras/{camera_id}/internal/mark-video-processed", {})
+
     def create_detection(self, payload: dict) -> dict | None:
         return self._safe_post("/api/detections", payload)
 

@@ -74,6 +74,7 @@ class CameraResponse(BaseModel):
     source_type: CameraSourceType
     video_file_path: str
     loop_video: bool
+    video_processed_at: datetime | None
     resolution_width: int
     resolution_height: int
     capture_fps: int

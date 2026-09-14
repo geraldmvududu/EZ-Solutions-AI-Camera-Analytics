@@ -47,6 +47,20 @@ class Camera(Base, UUIDPKMixin, TimestampMixin, TenantScopedMixin):
 
     video_file_path: Mapped[str] = mapped_column(String(1000), nullable=False, default="")
     loop_video: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    # Real user request: footage from a finite video file (looping test/demo clips, or
+    # uploaded external-source footage) was producing genuinely "new-looking" events
+    # every time the loop replayed the same content — each crossing is >30s apart from
+    # the last, so the cooldowns (worker.py's OBJECT_EVENT_COOLDOWN_SECONDS/
+    # TRIPWIRE_VIOLATION_COOLDOWN_SECONDS) correctly treat each loop pass as a distinct
+    # occurrence, since from the AI's perspective it genuinely is one — there is no
+    # frame-content memory spanning an entire loop. video_processed_at is set once
+    # (worker.py's _run(), via a new internal endpoint) when a VIDEO_FILE camera with
+    # loop_video=False reaches real end-of-file — at that point is_active is also set
+    # False so main.py's discovery loop stops restarting it, permanently ending
+    # analysis of that footage rather than the previous behavior of retrying it every
+    # ~60s forever. Nullable/None for every other camera and for a VIDEO_FILE camera
+    # still actively looping.
+    video_processed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
     resolution_width: Mapped[int] = mapped_column(Integer, default=1280, nullable=False)
     resolution_height: Mapped[int] = mapped_column(Integer, default=720, nullable=False)

@@ -156,6 +156,16 @@ class CameraWorker:
                 frame = source.read()
                 if frame is None:
                     logger.warning("Camera %s: source returned no frame, stopping worker", self.camera["name"])
+                    # Real user request: a finite video file that isn't looping has
+                    # genuinely reached its end, not failed — mark it processed so
+                    # main.py's discovery loop stops retrying it forever (the previous
+                    # behavior kept re-opening and re-analyzing the same footage every
+                    # ~60s, producing "new" events for content that was never new).
+                    # Scoped tightly to VIDEO_FILE + loop_video=False specifically —
+                    # a live RTSP/webcam source returning no frame is a transient
+                    # glitch, never "done."
+                    if self.camera["source_type"] == "VIDEO_FILE" and not self.camera.get("loop_video", True):
+                        backend_client.mark_video_processed(self.camera_id)
                     break
 
                 if self._privacy_zones:

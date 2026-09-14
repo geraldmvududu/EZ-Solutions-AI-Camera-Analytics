@@ -15,7 +15,7 @@ def _walk_through(steps: int = 8, y: float = 0.5) -> list[tuple[float, float]]:
 def _climb_over(steps: int = 8) -> list[tuple[float, float]]:
     """A sharp vertical excursion with little horizontal drift — a real climb/jump
     tends to look like this: up over the top, then down the other side. Each vertical
-    step (0.2) clearly exceeds GATE_JUMP_MIN_VERTICAL_STEP (0.12) and the near-zero
+    step (0.2) clearly exceeds GATE_JUMP_MIN_VERTICAL_STEP (0.10) and the near-zero
     horizontal drift (0.01/step) clearly satisfies the velocity-ratio check."""
     path = []
     x = 0.5
@@ -34,6 +34,23 @@ def test_sharp_vertical_excursion_is_flagged_as_a_climb():
     confidence = gate_jump_confidence(_climb_over())
     assert confidence is not None
     assert 0.5 <= confidence <= 0.99
+
+
+def test_real_footage_jump_truncated_by_track_churn_is_now_flagged():
+    """Regression test for the exact real crossing found live: a genuine gate jump
+    where CentroidTracker's own max_distance briefly lost the track right at the
+    jump's peak, leaving only a short (7-sample) history with peak_vertical=0.114 —
+    just under the original 0.12 threshold, which silently missed it. Reconstructs
+    that real shape (mostly-vertical motion, modest horizontal drift, 7 samples)."""
+    path = [(0.50, 0.30), (0.51, 0.32), (0.52, 0.434), (0.53, 0.44), (0.54, 0.44), (0.55, 0.45), (0.56, 0.45)]
+    stats = gate_jump_trajectory_stats(path)
+    assert stats is not None
+    peak_vertical, _avg_horizontal, window_len = stats
+    assert round(peak_vertical, 3) == 0.114  # the exact real value measured live
+    assert window_len == 7  # the exact real (truncated) window length measured live
+
+    confidence = gate_jump_confidence(path)
+    assert confidence is not None
 
 
 def test_too_short_a_history_is_never_flagged():

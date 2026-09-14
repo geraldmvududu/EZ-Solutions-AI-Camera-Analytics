@@ -447,6 +447,27 @@ def camera_heartbeat(camera_id: uuid.UUID, db: Session = Depends(get_db)) -> dic
     return {"detail": "ok"}
 
 
+@router.post("/{camera_id}/internal/mark-video-processed", include_in_schema=False, dependencies=[Depends(require_internal_service)])
+def mark_video_processed_internal(camera_id: uuid.UUID, db: Session = Depends(get_db)) -> dict:
+    """Called once by worker.py when a VIDEO_FILE camera with loop_video=False reaches
+    real end-of-file (see Camera.video_processed_at's own docstring for why this
+    exists). Sets is_active=False so GET /cameras/internal/active drops this camera
+    and main.py's discovery loop stops restarting it — permanently ending analysis of
+    that footage instead of retrying it forever. Idempotent: calling it again on an
+    already-processed camera is a harmless no-op, not an error."""
+    from datetime import datetime, timezone
+
+    camera = db.get(Camera, camera_id)
+    if camera is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Camera not found")
+
+    if camera.video_processed_at is None:
+        camera.video_processed_at = datetime.now(timezone.utc)
+        camera.is_active = False
+        db.commit()
+    return {"detail": "ok"}
+
+
 @router.get("/{camera_id}/stream")
 async def stream_camera(camera_id: uuid.UUID, token: str, db: Session = Depends(get_db)) -> StreamingResponse:
     """Live MJPEG view (sections 13/38). Proxies the ai-engine's real annotated frame

@@ -575,6 +575,34 @@ this platform has no way to offer generically anyway). One video per camera, mat
 the existing model — a user with many files on their drive repeats upload+create per
 file, the same granularity every other VIDEO_FILE camera already has.
 
+**Process-once video files** (`Camera.video_processed_at`,
+`POST /api/cameras/{id}/internal/mark-video-processed`): a direct follow-up to the
+upload feature above, and a real user-reported bug — a looping VIDEO_FILE camera
+(`loop_video=True`, the existing default) kept producing genuinely "new-looking"
+events every time it looped back to the start. This isn't a duplicate-detection gap:
+`OBJECT_EVENT_COOLDOWN_SECONDS`/`TRIPWIRE_VIOLATION_COOLDOWN_SECONDS`/the snapshot
+aHash dedup (all documented above/in the limitations) correctly treat each loop pass
+as a distinct occurrence, because from the AI's perspective — and from a real,
+un-cached frame-content perspective — it genuinely is one; nothing anywhere
+remembers "this exact footage already played once." `loop_video` itself already
+existed as a `Camera` column but was never exposed in the frontend and, even set to
+`False`, didn't actually stop anything: `worker.py`'s `_run()` treated a
+non-looping source reaching end-of-file identically to any other read failure (just
+stop this worker), and `main.py`'s discovery loop retried a stopped worker every
+~60s forever regardless of why it stopped — so a "non-looping" video was, in
+practice, replayed from the start roughly once a minute, forever. Now:
+`Cameras.tsx`'s create/edit form exposes a real "Loop this video continuously"
+checkbox; unchecking it means the ai-engine plays the file exactly once, and the
+moment `source.read()` genuinely returns no frame for that VIDEO_FILE camera,
+`worker.py` calls the new internal endpoint, which sets `video_processed_at` and
+`is_active=False` — the same `is_active` flag `GET /cameras/internal/active` already
+filters on, so the camera permanently drops out of ai-engine's discovery loop with
+zero new filtering logic needed anywhere. Scoped tightly to VIDEO_FILE +
+`loop_video=False`: a live RTSP/webcam/etc. source (or a still-looping VIDEO_FILE
+camera) returning no frame is a transient glitch, never "finished footage," and must
+never trigger this. The Cameras table shows a "Processed" badge once set, and the
+edit form shows the timestamp.
+
 ## Development commands
 
 ```bash
@@ -597,7 +625,7 @@ cd ai-engine && python -m app.main
 ## Testing commands
 
 ```bash
-cd backend && pytest -q      # 220 tests: auth, RBAC, tenant isolation, camera CRUD
+cd backend && pytest -q      # 225 tests: auth, RBAC, tenant isolation, camera CRUD
                               # (including the delete cascade covering every dependent
                               # table), credential encryption, rule engine, analytics
                               # aggregates, report export, the Redis-backed rate limiter
@@ -663,8 +691,15 @@ cd backend && pytest -q      # 220 tests: auth, RBAC, tenant isolation, camera C
                               # manage_cameras, refusing — and cleaning up the partial
                               # file — when free disk space would drop below the
                               # safety margin, and the returned path round-tripping
-                              # into a real VIDEO_FILE camera creation)
-cd ai-engine && pytest -q    # 106 tests: centroid tracker (including type-aware
+                              # into a real VIDEO_FILE camera creation), and
+                              # POST /cameras/{id}/internal/mark-video-processed (sets
+                              # video_processed_at + is_active=False, is idempotent,
+                              # 404s for an unknown camera, requires the internal
+                              # token, and the marked camera genuinely drops out of
+                              # GET /cameras/internal/active — the actual mechanism
+                              # that stops the ai-engine discovery loop from
+                              # restarting it)
+cd ai-engine && pytest -q    # 110 tests: centroid tracker (including type-aware
                               # matching so a multi-class detector can't let a track
                               # of one object_type steal another's), zone/tripwire
                               # geometry, loitering timer, motion detection (real MOG2 background
@@ -719,7 +754,15 @@ cd ai-engine && pytest -q    # 106 tests: centroid tracker (including type-aware
                               # takes is never treated as a duplicate, and — a real,
                               # disclosed scope limit — a repeated frame is only
                               # compared against the IMMEDIATELY PREVIOUS snapshot, not
-                              # a full history)
+                              # a full history), a real-footage regression test for the
+                              # gate-jump threshold tuning (the exact truncated
+                              # 7-sample/peak_vertical=0.114 shape measured live is now
+                              # correctly flagged), and the video-file EOF handling
+                              # fix (a VIDEO_FILE camera with loop_video=False reaching
+                              # real end-of-file reports mark_video_processed, a
+                              # looping one never does, and a live source — RTSP/
+                              # webcam/... — returning no frame is never mistaken for
+                              # "finished footage" even with loop_video=False)
 cd worker && pytest -q       # 21 tests: retention cleanup for recordings/snapshots/
                               # face-recognition-events/face-profiles against a real
                               # SQLite DB with a hand-crafted minimal schema (the
@@ -944,7 +987,19 @@ narrowly-scoped IAM key in production — never reuse a broader-privileged crede
    `tripwire_analysis.py::gate_jump_trajectory_stats`) whenever a crossing is NOT
    classified as a jump — this heuristic has never been validated against real
    footage (only synthetic trajectories, see above), so tuning the two constants
-   needs to be based on what a real crossing actually measures as, not a guess.
+   needs to be based on what a real crossing actually measures as, not a guess. That
+   logging immediately paid off: the same real gate jump measured
+   `peak_vertical=0.114` (twice) against the original `GATE_JUMP_MIN_VERTICAL_STEP`
+   of `0.12` — just under — with a short 7-of-8-sample window, suggesting
+   `CentroidTracker`'s own `max_distance` briefly lost the track right at the jump's
+   peak displacement (a real, plausible interaction: a genuine jump's frame-to-frame
+   centroid displacement is exactly the kind of large jump `CentroidTracker` is
+   liable to interpret as "a different object," truncating the very history this
+   heuristic reads). Lowered to `0.10` — comfortably below the two real `0.114`
+   measurements, still far above the ordinary walk-noise this same camera logged
+   (`0.024`) — with a regression test (`test_real_footage_jump_truncated_by_track_
+   churn_is_now_flagged`) reconstructing the exact real shape. First real-footage
+   tuning this constant has ever had.
 17. **Theft/unauthorized-object-removal detection (AI Video Intelligence Phase 2) is
    implemented, with two real, disclosed scope limits.** First, COCO (the dataset the
    new `YoloDetector` — `ai-engine/app/detectors/yolo_detector.py` — is trained on) has
@@ -1062,6 +1117,16 @@ narrowly-scoped IAM key in production — never reuse a broader-privileged crede
    restart (limitation 9) forgets the last snapshot and the next frame captured after
    restart is never treated as a duplicate, even if it's identical to the last one
    saved before the restart.
+26. **"Process once" (`Camera.video_processed_at`, limitation 25's companion fix) only
+   applies to a VIDEO_FILE camera with `loop_video` explicitly set to `False`** — the
+   existing default (`loop_video=True`) is completely unaffected, so an existing
+   looping camera keeps looping exactly as before until an admin opts it into
+   process-once via the Cameras page. Marking happens on a real, single
+   end-of-file read failure — there is no retry-and-confirm around it, so a VIDEO_FILE
+   source whose underlying file is on flaky/network storage and returns a transient
+   read failure partway through (not real EOF) would be marked processed prematurely;
+   this hasn't been observed in practice (local-disk/uploaded files only, so far) but
+   is a real, disclosed edge case, not a guarantee this can never happen.
 
 ## Current implementation status
 

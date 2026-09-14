@@ -23,6 +23,7 @@ export interface Camera {
   source_type: CameraSourceType;
   video_file_path: string;
   loop_video: boolean;
+  video_processed_at: string | null;
   resolution_width: number;
   resolution_height: number;
   capture_fps: number;

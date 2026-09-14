@@ -4,15 +4,24 @@ tailgating detection (section 8) for tripwire crossings.
 Both are real, transparent, and honestly approximate — see each function/class's own
 docstring for exactly what signal it uses and what it does NOT verify. Neither is a
 trained classifier; there is no such model in this environment (see CLAUDE.md "Known
-limitations"). Constants below were tuned against synthetic test trajectories only
-(tests/test_gate_jumping.py) — validate against real footage once deployed.
+limitations"). Constants below were originally tuned against synthetic test
+trajectories only — GATE_JUMP_MIN_VERTICAL_STEP has since been adjusted once against
+real footage (see its own comment), the first time this has actually happened.
 """
 
 # ~1.5s of history at the default 5 ai_fps (CentroidTracker keeps up to 50 samples).
 GATE_JUMP_WINDOW = 8
 # Minimum peak per-sample vertical displacement (normalized 0-1 frame-height units) to
 # even consider a crossing anomalous — below this, it's ordinary frame-to-frame noise.
-GATE_JUMP_MIN_VERTICAL_STEP = 0.12
+# Real footage found live: a genuine gate jump measured peak_vertical=0.114 (twice),
+# just under the original 0.12 — and with a short (7-of-8-sample) window, suggesting
+# CentroidTracker's own max_distance briefly lost the track right at the jump's peak
+# displacement, truncating the very history this heuristic reads. Lowered to 0.10,
+# comfortably below the two real 0.114 measurements and still far above the ordinary
+# walk-noise this same camera logged (0.024) — see worker.py's diagnostic logging
+# (added alongside this fix) for how these real numbers were captured in the first
+# place, instead of guessing at a new value blindly.
+GATE_JUMP_MIN_VERTICAL_STEP = 0.10
 # The peak vertical step must also clearly dominate the track's own recent horizontal
 # pace — this is what tells a genuine climb/jump (mostly-vertical motion) apart from a
 # fast diagonal walk (proportionally similar vertical and horizontal motion).
