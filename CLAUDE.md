@@ -631,7 +631,7 @@ cd backend && pytest -q      # 215 tests: auth, RBAC, tenant isolation, camera C
                               # incident_alerts/Incident references, delete_rule having
                               # no dependent-row handling at all) — all against a real
                               # in-memory SQLite DB through the actual FastAPI app
-cd ai-engine && pytest -q    # 95 tests: centroid tracker (including type-aware
+cd ai-engine && pytest -q    # 104 tests: centroid tracker (including type-aware
                               # matching so a multi-class detector can't let a track
                               # of one object_type steal another's), zone/tripwire
                               # geometry, loitering timer, motion detection (real MOG2 background
@@ -675,7 +675,18 @@ cd ai-engine && pytest -q    # 95 tests: centroid tracker (including type-aware
                               # reported, the very first crossing must never be
                               # swallowed, and two DIFFERENT tripwires crossed by the
                               # same movement must each still get their own event —
-                              # cooldowns are independent per tripwire, not global)
+                              # cooldowns are independent per tripwire, not global),
+                              # and the real content-based snapshot deduplication fix
+                              # (app/core/frame_similarity.py's aHash comparison: an
+                              # identical frame reuses the previous snapshot instead of
+                              # saving a new one, light per-pixel noise between two
+                              # captures of the same content is still recognized as a
+                              # duplicate, a genuinely different frame still gets its
+                              # own snapshot, the very first snapshot a camera ever
+                              # takes is never treated as a duplicate, and — a real,
+                              # disclosed scope limit — a repeated frame is only
+                              # compared against the IMMEDIATELY PREVIOUS snapshot, not
+                              # a full history)
 cd worker && pytest -q       # 21 tests: retention cleanup for recordings/snapshots/
                               # face-recognition-events/face-profiles against a real
                               # SQLite DB with a hand-crafted minimal schema (the
@@ -981,6 +992,30 @@ narrowly-scoped IAM key in production — never reuse a broader-privileged crede
    `GATE_JUMPING_DETECTED`/`TAILGATING_DETECTED` checks for that same crossing too,
    since they're evaluated from the same (now-suppressed) crossing event. Covered by
    `ai-engine/tests/test_tripwire_violation_cooldown.py`.
+25. **Snapshot deduplication (`ai-engine/app/core/frame_similarity.py`) is real
+   content-based comparison, but a deliberately narrow one**: requested directly by
+   the user after testing against a looping demo video file, where the existing
+   cooldowns (limitations 23/24) only throttle by elapsed time — once a loop's period
+   exceeds the cooldown window, a "new" event fires for a frame that's visually
+   identical to one already saved, writing another near-duplicate JPEG. Fixed by
+   computing a real 64-bit average hash (aHash: downscale to 8x8 grayscale, threshold
+   each pixel against the image's own mean brightness) of every captured frame and
+   comparing it, via Hamming distance, against the hash of the last snapshot actually
+   saved for that camera — a Hamming distance of 5 bits or fewer (out of 64) is treated
+   as "the same picture" and reuses the existing snapshot instead of writing/uploading
+   a new one; the *event* itself is still created and logged either way, only the
+   redundant image file is skipped. This is a coarse, transparent heuristic (per
+   CLAUDE.md's "do not hallucinate accuracy we don't have" convention), not a trained
+   image-similarity model, and has two honest, disclosed scope limits: it only compares
+   against the IMMEDIATELY PREVIOUS snapshot for that camera, not a full history (a
+   repeating A/B/A/B pattern will save A and B as distinct snapshots every time, since
+   each is "new" relative to the one right before it — this is what a looping single-
+   scene test video needs, not what a scene that alternates between two states needs);
+   and `_last_snapshot_hash`/`_last_snapshot_id` are plain in-memory instance state on
+   `CameraWorker`, so — like every other per-camera cooldown in this file — a worker
+   restart (limitation 9) forgets the last snapshot and the next frame captured after
+   restart is never treated as a duplicate, even if it's identical to the last one
+   saved before the restart.
 
 ## Current implementation status
 

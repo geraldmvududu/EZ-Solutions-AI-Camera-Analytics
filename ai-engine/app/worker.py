@@ -22,6 +22,7 @@ from app.core.object_tracking import AssetZoneTracker
 from app.core.overlay import draw_overlay
 from app.core.privacy import apply_privacy_masks
 from app.core.face_recognizer import FaceRecognizer
+from app.core.frame_similarity import average_hash, frames_are_duplicates
 from app.core.recorder import SegmentRecorder
 from app.core.snapshotter import save_snapshot
 from app.core.tracker import CentroidTracker
@@ -113,6 +114,8 @@ class CameraWorker:
         self._last_heartbeat = 0.0
         self._last_object_event_sent = 0.0
         self._last_tripwire_violation_sent: dict[str, float] = {}
+        self._last_snapshot_hash: int | None = None
+        self._last_snapshot_id: str | None = None
         self._last_motion_time = 0.0
         self._last_detection_time = 0.0
         self._segment_started_at = 0.0
@@ -477,6 +480,21 @@ class CameraWorker:
                     )
 
     def _save_and_report_snapshot(self, frame, detection) -> str | None:
+        # Real, content-based duplicate detection (requested directly by the user,
+        # testing against a looping demo video): OBJECT_EVENT_COOLDOWN_SECONDS/
+        # TRIPWIRE_VIOLATION_COOLDOWN_SECONDS above only throttle by elapsed time, so
+        # once a video loop's period exceeds the cooldown window, a "new" event fires
+        # for a frame that's visually identical to one already saved. This compares
+        # the actual pixels (a real perceptual hash, not a timer) against the last
+        # snapshot taken for this camera, and — when it's the same picture — reuses
+        # that existing snapshot instead of writing/uploading yet another
+        # near-identical JPEG. The event itself is still created and logged; only the
+        # redundant image file is skipped, since the event history (who/when/what)
+        # stays meaningful even when the picture doesn't change.
+        current_hash = average_hash(frame)
+        if self._last_snapshot_hash is not None and frames_are_duplicates(current_hash, self._last_snapshot_hash):
+            return self._last_snapshot_id
+
         saved = save_snapshot(self.camera, frame)
         record = backend_client.create_snapshot(
             {
@@ -489,7 +507,10 @@ class CameraWorker:
                 "confidence": detection.confidence if detection else None,
             }
         )
-        return record.get("id") if record else None
+        snapshot_id = record.get("id") if record else None
+        self._last_snapshot_hash = current_hash
+        self._last_snapshot_id = snapshot_id
+        return snapshot_id
 
     def _handle_recording(self, frame, capture_fps: float, motion_detected: bool) -> None:
         mode = self.camera.get("recording_mode", "AI_EVENT")
