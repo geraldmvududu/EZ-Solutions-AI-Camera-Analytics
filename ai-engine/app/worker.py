@@ -220,6 +220,20 @@ class CameraWorker:
         # Throttle so a continuously-moving scene doesn't spam an event every frame.
         if time.time() - getattr(self, "_last_motion_event_sent", 0) < 30:
             return
+        # Real user request: a busy camera was logging MOTION_DETECTED and
+        # PERSON_DETECTED within a second or two of each other for the exact same
+        # passage — both cooldowns were individually correct, but together they still
+        # produced two events (often sharing a near-identical snapshot) for one
+        # occurrence. Whenever the AI detector already has something actively tracked
+        # (self._last_tracked, refreshed every AI-sampled frame — see _run()), that
+        # more specific PERSON_DETECTED/VEHICLE_DETECTED/AI_DETECTION event already
+        # covers this motion; a bare "something moved" report adds nothing. A plain
+        # MOTION_DETECTED is still reported when motion is seen but nothing is
+        # currently tracked (a shadow, lighting change, an object type the detector
+        # doesn't recognize, or no AI detector configured at all) — genuinely the only
+        # signal available in that case.
+        if self._last_tracked:
+            return
         self._last_motion_event_sent = time.time()
         backend_client.create_event(
             {

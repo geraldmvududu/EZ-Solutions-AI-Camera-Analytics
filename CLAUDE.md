@@ -699,7 +699,7 @@ cd backend && pytest -q      # 225 tests: auth, RBAC, tenant isolation, camera C
                               # GET /cameras/internal/active — the actual mechanism
                               # that stops the ai-engine discovery loop from
                               # restarting it)
-cd ai-engine && pytest -q    # 110 tests: centroid tracker (including type-aware
+cd ai-engine && pytest -q    # 114 tests: centroid tracker (including type-aware
                               # matching so a multi-class detector can't let a track
                               # of one object_type steal another's), zone/tripwire
                               # geometry, loitering timer, motion detection (real MOG2 background
@@ -762,7 +762,14 @@ cd ai-engine && pytest -q    # 110 tests: centroid tracker (including type-aware
                               # real end-of-file reports mark_video_processed, a
                               # looping one never does, and a live source — RTSP/
                               # webcam/... — returning no frame is never mistaken for
-                              # "finished footage" even with loop_video=False)
+                              # "finished footage" even with loop_video=False), and the
+                              # motion-suppressed-when-tracked fix (a plain
+                              # MOTION_DETECTED is skipped while the AI detector already
+                              # has something tracked — the more specific PERSON_
+                              # DETECTED/etc. event covers the same motion — but still
+                              # fires when nothing is tracked, the per-type cooldown
+                              # still applies regardless of tracking state, and motion
+                              # reporting resumes once tracking ends)
 cd worker && pytest -q       # 21 tests: retention cleanup for recordings/snapshots/
                               # face-recognition-events/face-profiles against a real
                               # SQLite DB with a hand-crafted minimal schema (the
@@ -1127,6 +1134,31 @@ narrowly-scoped IAM key in production — never reuse a broader-privileged crede
    read failure partway through (not real EOF) would be marked processed prematurely;
    this hasn't been observed in practice (local-disk/uploaded files only, so far) but
    is a real, disclosed edge case, not a guarantee this can never happen.
+27. **Cross-event-type deduplication (`worker.py::_on_motion_detected`) is real but
+   deliberately narrow** — requested directly by the user after a busy camera kept
+   logging MOTION_DETECTED and PERSON_DETECTED within a second or two of each other
+   for the exact same passage: both cooldowns (limitations 23, and the object-event
+   one before it) were individually correct, but together they still produced two
+   events, often sharing a near-identical snapshot (the aHash dedup from limitation 25
+   correctly recognized the picture as the same, which is what made the duplication so
+   visually obvious). Fixed by skipping MOTION_DETECTED entirely whenever the AI
+   detector already has something actively tracked — the more specific PERSON_
+   DETECTED/VEHICLE_DETECTED/AI_DETECTION event already covers that same motion, and a
+   bare "something moved" report on top of it adds nothing. A real design decision,
+   not an oversight: this does NOT also try to suppress PERSON_DETECTED relative to a
+   following TRIPWIRE_VIOLATION (or a zone violation), because those represent
+   genuinely different, both-worth-keeping information (a person is detected vs. that
+   person crossed a specific boundary), and an earlier attempt at a general cross-type
+   "pick only the single most relevant event" priority system was reverted before
+   shipping specifically because it broke a real, deliberately-tested guarantee: two
+   DIFFERENT tripwires crossed by the same movement must each still report their own
+   event (`test_tripwire_violation_cooldown.py::test_different_tripwires_have_
+   independent_cooldowns`) — a naive priority-rank scheme couldn't tell "the same
+   occurrence described redundantly" apart from "two genuinely distinct configured
+   detections that happen to share a moment," and getting that distinction wrong risks
+   silently dropping real security-relevant crossings. TRIPWIRE_VIOLATION and every
+   zone/gate-jump/tailgating/theft event type keep exactly the debounce mechanism they
+   already had (per-tripwire cooldown, per-(track,zone) `.observe()`) — unchanged.
 
 ## Current implementation status
 
