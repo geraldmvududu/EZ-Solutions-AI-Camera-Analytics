@@ -224,6 +224,26 @@ def test_low_quality_face_skips_without_calling_backend(monkeypatch):
     recognizer.maybe_recognize({"face_recognition_enabled": True}, _frame(), 1, _person_detection(), (0.25, 0.35), [])
 
 
+def test_low_quality_face_logs_the_real_reason(monkeypatch, caplog):
+    """Real bug found live on the deployed VM: this gate used to fail completely
+    silently — zero log output, zero face_recognition_events rows — making "why isn't
+    recognition matching this person" undebuggable from the outside. A real user's
+    enrolled-person theft-detection test kept finding zero recognition attempts logged
+    anywhere, and this is what made the actual cause (the HOG person-bbox crop's face
+    region not passing quality) visible instead of looking identical to "recognition
+    just isn't running at all.\""""
+    monkeypatch.setattr(face_embedding, "assess_recognition_quality", lambda crop, q: face_embedding.QualityCheckResult(
+        False, "No face detected", 0, None, 0.0, 0.0, 0.0, 0.0
+    ))
+
+    recognizer = FaceRecognizer("cam-1")
+    with caplog.at_level("INFO", logger="ai-engine.face_recognizer"):
+        recognizer.maybe_recognize({"face_recognition_enabled": True}, _frame(), 1, _person_detection(), (0.25, 0.35), [])
+
+    assert "No face detected" in caplog.text
+    assert "track 1" in caplog.text
+
+
 def _mock_recognition_pipeline(monkeypatch, recognize_result: dict):
     monkeypatch.setattr(face_embedding, "assess_recognition_quality", lambda crop, q: face_embedding.QualityCheckResult(
         True, "", 1, face_embedding.DetectedFace(0, 0, 50, 50), 0.9, 0.9, 0.9, 0.9

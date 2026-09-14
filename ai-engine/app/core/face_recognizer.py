@@ -142,11 +142,27 @@ class FaceRecognizer:
         x2 = min(w, int((detection.x + detection.width) * w))
         y2 = min(h, int((detection.y + detection.height) * h))
         if x2 <= x1 or y2 <= y1:
+            logger.info("Camera %s: track %s recognition attempt skipped — degenerate crop bounds (%d,%d)-(%d,%d)", self.camera_id, track_id, x1, y1, x2, y2)
             return
         crop = frame[y1:y2, x1:x2]
 
         quality = face_embedding.assess_recognition_quality(crop, settings.face_min_quality)
         if not quality.passed:
+            # Real, honest instrumentation — this gate used to fail completely
+            # silently (zero log output, zero face_recognition_events rows), making
+            # "why isn't recognition matching this person" undebuggable from the
+            # outside. Mirrors the same real-data-over-guessing discipline used for
+            # gate_jump_trajectory_stats: log exactly which check failed and the real
+            # measured numbers, so a genuine recognition gap (bad framing, a face too
+            # small in frame, poor lighting) is visible instead of looking identical
+            # to "recognition just isn't running at all."
+            logger.info(
+                "Camera %s: track %s recognition attempt skipped — %s "
+                "(faces_found=%d quality_score=%.2f blur=%.2f brightness=%.2f size=%.2f, need >=%.2f)",
+                self.camera_id, track_id, quality.reason or "quality below threshold",
+                quality.face_count, quality.quality_score, quality.blur_score,
+                quality.brightness_score, quality.size_score, settings.face_min_quality,
+            )
             return
 
         if camera.get("liveness_detection_enabled") and not self._passes_liveness_check(track_id, crop):
