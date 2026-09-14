@@ -225,7 +225,21 @@ def delete_camera(
     to use correlated subqueries instead (`Alert.camera_id == camera_id` evaluated
     inside the database, on the existing indexed column, once), which is how every
     other filter in this function already works — this was the one place that broke
-    that pattern."""
+    that pattern.
+
+    Third real bug found live on the same VM, on the same camera, immediately after
+    the second fix above: even at full subquery speed, the delete still failed with
+    `alerts_snapshot_id_fkey` — an Alert's `snapshot_id` pointed at one of this
+    camera's snapshots even though that Alert's own `camera_id` didn't match (almost
+    certainly a leftover inconsistency from this session's own earlier manual SQL
+    cleanup on this VM, but the fix has to hold regardless of how it arose). Every
+    null-out below is now scoped by the PARENT row's own camera_id (e.g. "any
+    Detection/Event/Alert/FaceRecognitionEvent anywhere whose snapshot_id points at a
+    snapshot this camera owns") instead of assuming the referencing row shares the
+    same camera_id — the only case that was ever actually cheap to assume, and the
+    one that turned out to be wrong. Every column here already has an index (this
+    phase's other migrations), so each of these remains a single indexed lookup, not
+    a table scan."""
     camera = _get_owned_camera(db, camera_id, user)
 
     snapshot_paths = [
@@ -236,13 +250,23 @@ def delete_camera(
     ]
     camera_alert_ids = sa.select(Alert.id).where(Alert.camera_id == camera_id).scalar_subquery()
     camera_event_ids = sa.select(Event.id).where(Event.camera_id == camera_id).scalar_subquery()
+    camera_snapshot_ids = sa.select(Snapshot.id).where(Snapshot.camera_id == camera_id).scalar_subquery()
+    camera_recording_ids = sa.select(Recording.id).where(Recording.camera_id == camera_id).scalar_subquery()
+    camera_detection_ids = sa.select(Detection.id).where(Detection.camera_id == camera_id).scalar_subquery()
+    camera_zone_ids = sa.select(Zone.id).where(Zone.camera_id == camera_id).scalar_subquery()
+    camera_tripwire_ids = sa.select(Tripwire.id).where(Tripwire.camera_id == camera_id).scalar_subquery()
 
-    db.query(Detection).filter(Detection.camera_id == camera_id).update(
-        {"snapshot_id": None, "recording_id": None}, synchronize_session=False
-    )
-    db.query(Event).filter(Event.camera_id == camera_id).update(
-        {"detection_id": None, "snapshot_id": None, "recording_id": None}, synchronize_session=False
-    )
+    db.query(Event).filter(Event.zone_id.in_(camera_zone_ids)).update({"zone_id": None}, synchronize_session=False)
+    db.query(Event).filter(Event.tripwire_id.in_(camera_tripwire_ids)).update({"tripwire_id": None}, synchronize_session=False)
+    db.query(Detection).filter(Detection.snapshot_id.in_(camera_snapshot_ids)).update({"snapshot_id": None}, synchronize_session=False)
+    db.query(Detection).filter(Detection.recording_id.in_(camera_recording_ids)).update({"recording_id": None}, synchronize_session=False)
+    db.query(Event).filter(Event.snapshot_id.in_(camera_snapshot_ids)).update({"snapshot_id": None}, synchronize_session=False)
+    db.query(Event).filter(Event.recording_id.in_(camera_recording_ids)).update({"recording_id": None}, synchronize_session=False)
+    db.query(Event).filter(Event.detection_id.in_(camera_detection_ids)).update({"detection_id": None}, synchronize_session=False)
+    db.query(Alert).filter(Alert.snapshot_id.in_(camera_snapshot_ids)).update({"snapshot_id": None}, synchronize_session=False)
+    db.query(Alert).filter(Alert.recording_id.in_(camera_recording_ids)).update({"recording_id": None}, synchronize_session=False)
+    db.query(FaceRecognitionEvent).filter(FaceRecognitionEvent.snapshot_id.in_(camera_snapshot_ids)).update({"snapshot_id": None}, synchronize_session=False)
+    db.query(FaceRecognitionEvent).filter(FaceRecognitionEvent.recording_id.in_(camera_recording_ids)).update({"recording_id": None}, synchronize_session=False)
     db.query(Snapshot).filter(Snapshot.camera_id == camera_id).update({"event_id": None}, synchronize_session=False)
 
     db.execute(incident_alerts.delete().where(incident_alerts.c.alert_id.in_(camera_alert_ids)))

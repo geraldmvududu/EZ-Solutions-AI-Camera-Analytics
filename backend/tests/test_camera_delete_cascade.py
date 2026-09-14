@@ -143,6 +143,63 @@ def test_delete_camera_with_full_real_dependent_data(client, db_session, admin_u
     assert surviving_notification.alert_id is None
 
 
+def test_delete_camera_when_a_different_cameras_alert_references_its_snapshot(client, db_session, tenant, admin_user):
+    """Real bug found live on the deployed VM, on a camera with 137,927 detections and
+    26,067 alerts: deletion failed with `alerts_snapshot_id_fkey` because an Alert's
+    snapshot_id pointed at a snapshot owned by the camera being deleted even though
+    that Alert's own camera_id was different (a leftover inconsistency from manual DB
+    surgery, but the fix must hold regardless of how such a row arises). The original
+    fix only nulled Alert.snapshot_id for alerts sharing the same camera_id as the
+    snapshot — this reproduces the exact cross-camera case that slipped through that."""
+    token = login(client, admin_user.email)
+    camera_a_id = uuid.UUID(
+        client.post("/api/cameras", json={"name": "Camera A", "source_type": "SIMULATED"}, headers=auth_headers(token)).json()["id"]
+    )
+    camera_b_id = uuid.UUID(
+        client.post("/api/cameras", json={"name": "Camera B", "source_type": "SIMULATED"}, headers=auth_headers(token)).json()["id"]
+    )
+
+    # Snapshot, Zone, and Tripwire all belong to camera A (the one being deleted).
+    snapshot = Snapshot(tenant_id=tenant.id, camera_id=camera_a_id, file_path="/tmp/does-not-exist.jpg", taken_at=datetime.now(timezone.utc))
+    zone = Zone(tenant_id=tenant.id, camera_id=camera_a_id, name="Zone A", zone_type=ZoneType.INTRUSION, polygon=[[0, 0], [1, 0], [1, 1]])
+    tripwire = Tripwire(tenant_id=tenant.id, camera_id=camera_a_id, name="Line A", line=[[0, 0], [1, 1]])
+    db_session.add_all([snapshot, zone, tripwire])
+    db_session.commit()
+
+    # The Event/Alert belong to camera B, but reference camera A's snapshot/zone/
+    # tripwire — the exact cross-camera shape that broke live.
+    event_b = Event(
+        tenant_id=tenant.id, camera_id=camera_b_id, event_type=EventType.TRIPWIRE_VIOLATION,
+        severity=EventSeverity.HIGH, snapshot_id=snapshot.id, zone_id=zone.id, tripwire_id=tripwire.id,
+        occurred_at=datetime.now(timezone.utc), event_metadata={},
+    )
+    db_session.add(event_b)
+    db_session.commit()
+    alert_b = Alert(tenant_id=tenant.id, event_id=event_b.id, camera_id=camera_b_id, alert_type="TEST", severity=EventSeverity.HIGH, snapshot_id=snapshot.id)
+    db_session.add(alert_b)
+    db_session.commit()
+    event_b_id, alert_b_id = event_b.id, alert_b.id
+
+    resp = client.delete(f"/api/cameras/{camera_a_id}", headers=auth_headers(token))
+    assert resp.status_code == 204, resp.text
+
+    db_session.expire_all()
+    assert db_session.query(Snapshot).filter(Snapshot.camera_id == camera_a_id).count() == 0
+    assert db_session.query(Zone).filter(Zone.camera_id == camera_a_id).count() == 0
+    assert db_session.query(Tripwire).filter(Tripwire.camera_id == camera_a_id).count() == 0
+
+    # Camera B's own event/alert survive, just unlinked from the now-deleted
+    # cross-camera references.
+    surviving_event = db_session.get(Event, event_b_id)
+    assert surviving_event is not None
+    assert surviving_event.snapshot_id is None
+    assert surviving_event.zone_id is None
+    assert surviving_event.tripwire_id is None
+    surviving_alert = db_session.get(Alert, alert_b_id)
+    assert surviving_alert is not None
+    assert surviving_alert.snapshot_id is None
+
+
 def test_delete_camera_still_works_with_no_dependent_data(client, admin_user):
     """Regression guard: the simple case (from test_cameras.py) must keep working."""
     token = login(client, admin_user.email)

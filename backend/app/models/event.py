@@ -74,10 +74,10 @@ class Event(Base, UUIDPKMixin, TimestampMixin, TenantScopedMixin):
     # targets at CREATE TABLE time, so these are deferred to a post-creation ALTER
     # TABLE. zone/tripwire aren't part of the cycle and don't need this.
     detection_id: Mapped[uuid.UUID | None] = mapped_column(
-        ForeignKey("detections.id", use_alter=True, name="fk_events_detection_id"), nullable=True
+        ForeignKey("detections.id", use_alter=True, name="fk_events_detection_id"), nullable=True, index=True
     )
-    zone_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("zones.id"), nullable=True)
-    tripwire_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("tripwires.id"), nullable=True)
+    zone_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("zones.id"), nullable=True, index=True)
+    tripwire_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("tripwires.id"), nullable=True, index=True)
     snapshot_id: Mapped[uuid.UUID | None] = mapped_column(
         ForeignKey("snapshots.id", use_alter=True, name="fk_events_snapshot_id"), nullable=True, index=True
     )
