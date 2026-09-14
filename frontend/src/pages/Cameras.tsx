@@ -225,13 +225,14 @@ export function CamerasPage() {
 
   async function confirmDelete() {
     if (!deleteTarget) return;
-    const id = deleteTarget.id;
-    setDeleteTarget(null);
     setError(null);
     try {
-      await camerasApi.deleteCamera(id);
+      await camerasApi.deleteCamera(deleteTarget.id);
+      setDeleteTarget(null);
       load();
     } catch (err) {
+      // Dialog stays open (deleteTarget untouched) so the user can see the error and
+      // decide to retry or cancel, instead of it silently vanishing on failure.
       setError(err instanceof ApiError ? err.message : "Failed to delete camera");
     }
   }

@@ -5,6 +5,7 @@ from collections.abc import AsyncIterator
 from urllib.parse import urlparse
 
 import httpx
+import sqlalchemy as sa
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from fastapi.responses import StreamingResponse
 from jose import JWTError
@@ -212,7 +213,19 @@ def delete_camera(
     originally deleted `Alert` rows without first nulling the `Notification` rows
     (push/in-app feed) and `incident_alerts` join rows that reference them — harmless
     on a fresh camera with no activity, but real usage generates both. Both are handled
-    below, in the same "unscope rather than destroy" spirit as AIRule/Incident."""
+    below, in the same "unscope rather than destroy" spirit as AIRule/Incident.
+
+    Second real bug found live on the same VM, on a camera that had been running for
+    hours (137,927 detections / 26,067 alerts by the time it was deleted): the first
+    fix above materialized every matching Alert/Event ID into a Python list and built
+    an `IN (...)` clause from it — transmitting tens of thousands of literal UUIDs
+    over the wire and asking Postgres to plan against a literal list that large. This
+    made the delete take long enough that the browser gave up waiting (nginx logged a
+    real `499`, meaning the client closed the connection, not the server). Rewritten
+    to use correlated subqueries instead (`Alert.camera_id == camera_id` evaluated
+    inside the database, on the existing indexed column, once), which is how every
+    other filter in this function already works — this was the one place that broke
+    that pattern."""
     camera = _get_owned_camera(db, camera_id, user)
 
     snapshot_paths = [
@@ -221,12 +234,8 @@ def delete_camera(
     recording_paths = [
         row[0] for row in db.query(Recording.file_path).filter(Recording.camera_id == camera_id).all()
     ]
-    alert_ids = [
-        row[0] for row in db.query(Alert.id).filter(Alert.camera_id == camera_id).all()
-    ]
-    event_ids = [
-        row[0] for row in db.query(Event.id).filter(Event.camera_id == camera_id).all()
-    ]
+    camera_alert_ids = sa.select(Alert.id).where(Alert.camera_id == camera_id).scalar_subquery()
+    camera_event_ids = sa.select(Event.id).where(Event.camera_id == camera_id).scalar_subquery()
 
     db.query(Detection).filter(Detection.camera_id == camera_id).update(
         {"snapshot_id": None, "recording_id": None}, synchronize_session=False
@@ -236,15 +245,13 @@ def delete_camera(
     )
     db.query(Snapshot).filter(Snapshot.camera_id == camera_id).update({"event_id": None}, synchronize_session=False)
 
-    if alert_ids:
-        db.execute(incident_alerts.delete().where(incident_alerts.c.alert_id.in_(alert_ids)))
-        db.query(Notification).filter(Notification.alert_id.in_(alert_ids)).update(
-            {"alert_id": None}, synchronize_session=False
-        )
-    if event_ids:
-        db.query(Incident).filter(Incident.source_event_id.in_(event_ids)).update(
-            {"source_event_id": None}, synchronize_session=False
-        )
+    db.execute(incident_alerts.delete().where(incident_alerts.c.alert_id.in_(camera_alert_ids)))
+    db.query(Notification).filter(Notification.alert_id.in_(camera_alert_ids)).update(
+        {"alert_id": None}, synchronize_session=False
+    )
+    db.query(Incident).filter(Incident.source_event_id.in_(camera_event_ids)).update(
+        {"source_event_id": None}, synchronize_session=False
+    )
     db.query(Incident).filter(Incident.camera_id == camera_id).update({"camera_id": None}, synchronize_session=False)
 
     db.query(FaceRecognitionEvent).filter(FaceRecognitionEvent.camera_id == camera_id).delete(synchronize_session=False)

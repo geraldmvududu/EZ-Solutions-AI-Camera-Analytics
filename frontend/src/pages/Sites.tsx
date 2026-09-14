@@ -94,11 +94,10 @@ export function SitesPage() {
 
   async function confirmDelete() {
     if (!deleteTarget) return;
-    const id = deleteTarget.id;
-    setDeleteTarget(null);
     setError(null);
     try {
-      await sitesApi.deleteSite(id);
+      await sitesApi.deleteSite(deleteTarget.id);
+      setDeleteTarget(null);
       load();
     } catch (err) {
       setError(err instanceof ApiError ? err.message : "Failed to delete site");
