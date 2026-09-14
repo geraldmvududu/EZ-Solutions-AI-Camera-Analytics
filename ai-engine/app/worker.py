@@ -224,15 +224,22 @@ class CameraWorker:
         # PERSON_DETECTED within a second or two of each other for the exact same
         # passage — both cooldowns were individually correct, but together they still
         # produced two events (often sharing a near-identical snapshot) for one
-        # occurrence. Whenever the AI detector already has something actively tracked
-        # (self._last_tracked, refreshed every AI-sampled frame — see _run()), that
-        # more specific PERSON_DETECTED/VEHICLE_DETECTED/AI_DETECTION event already
-        # covers this motion; a bare "something moved" report adds nothing. A plain
-        # MOTION_DETECTED is still reported when motion is seen but nothing is
-        # currently tracked (a shadow, lighting change, an object type the detector
-        # doesn't recognize, or no AI detector configured at all) — genuinely the only
-        # signal available in that case.
-        if self._last_tracked:
+        # occurrence. Whenever the AI detector recently confirmed something tracked
+        # (self._last_detection_time, updated only on a real detection pass — see
+        # _run()), that more specific PERSON_DETECTED/VEHICLE_DETECTED/AI_DETECTION
+        # event already covers this motion; a bare "something moved" report adds
+        # nothing. Deliberately NOT self._last_tracked: that field gets reset to `{}`
+        # on every AI-frame-skip cycle between actual detection passes (see _run()'s
+        # `elif self._detector: self._last_tracked = self._tracker.update([])`), so
+        # it's empty most of the time even while a real track is still alive — a real
+        # bug caught before shipping by checking the actual live camera's behavior
+        # rather than assuming the fix worked from the test suite alone. The grace
+        # window below roughly matches CentroidTracker's own max_disappeared (~3s at
+        # typical ai_fps) so a momentarily-skipped frame doesn't look like "nothing
+        # tracked." A plain MOTION_DETECTED is still reported when motion is seen but
+        # nothing was recently detected (a shadow, lighting change, an object type the
+        # detector doesn't recognize, or no AI detector configured at all).
+        if time.time() - self._last_detection_time < 3.0:
             return
         self._last_motion_event_sent = time.time()
         backend_client.create_event(

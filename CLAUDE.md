@@ -699,7 +699,7 @@ cd backend && pytest -q      # 225 tests: auth, RBAC, tenant isolation, camera C
                               # GET /cameras/internal/active — the actual mechanism
                               # that stops the ai-engine discovery loop from
                               # restarting it)
-cd ai-engine && pytest -q    # 114 tests: centroid tracker (including type-aware
+cd ai-engine && pytest -q    # 115 tests: centroid tracker (including type-aware
                               # matching so a multi-class detector can't let a track
                               # of one object_type steal another's), zone/tripwire
                               # geometry, loitering timer, motion detection (real MOG2 background
@@ -763,13 +763,17 @@ cd ai-engine && pytest -q    # 114 tests: centroid tracker (including type-aware
                               # looping one never does, and a live source — RTSP/
                               # webcam/... — returning no frame is never mistaken for
                               # "finished footage" even with loop_video=False), and the
-                              # motion-suppressed-when-tracked fix (a plain
-                              # MOTION_DETECTED is skipped while the AI detector already
-                              # has something tracked — the more specific PERSON_
-                              # DETECTED/etc. event covers the same motion — but still
-                              # fires when nothing is tracked, the per-type cooldown
-                              # still applies regardless of tracking state, and motion
-                              # reporting resumes once tracking ends)
+                              # motion-suppressed-when-recently-detected fix (a plain
+                              # MOTION_DETECTED is skipped within a short grace window
+                              # of the AI detector's last real detection pass — the more
+                              # specific PERSON_DETECTED/etc. event covers the same
+                              # motion — but still fires when nothing was recently
+                              # detected, the per-type cooldown still applies regardless
+                              # of detection state, motion reporting resumes once the
+                              # grace window expires, and — the exact real bug this
+                              # fix's first version had — suppression survives a skip
+                              # frame resetting self._last_tracked to `{}`, since the
+                              # gate is keyed on self._last_detection_time instead)
 cd worker && pytest -q       # 21 tests: retention cleanup for recordings/snapshots/
                               # face-recognition-events/face-profiles against a real
                               # SQLite DB with a hand-crafted minimal schema (the
@@ -1006,7 +1010,11 @@ narrowly-scoped IAM key in production — never reuse a broader-privileged crede
    measurements, still far above the ordinary walk-noise this same camera logged
    (`0.024`) — with a regression test (`test_real_footage_jump_truncated_by_track_
    churn_is_now_flagged`) reconstructing the exact real shape. First real-footage
-   tuning this constant has ever had.
+   tuning this constant has ever had. Confirmed working on the same real camera after
+   deploying the fix: 4 real `GATE_JUMPING_DETECTED` events fired within about an
+   hour of normal looping playback, where zero had ever fired before — the config bug
+   (limitation 16's own earlier paragraph) and the threshold both needed fixing
+   together before this camera's real jump was ever actually caught.
 17. **Theft/unauthorized-object-removal detection (AI Video Intelligence Phase 2) is
    implemented, with two real, disclosed scope limits.** First, COCO (the dataset the
    new `YoloDetector` — `ai-engine/app/detectors/yolo_detector.py` — is trained on) has
@@ -1141,10 +1149,18 @@ narrowly-scoped IAM key in production — never reuse a broader-privileged crede
    one before it) were individually correct, but together they still produced two
    events, often sharing a near-identical snapshot (the aHash dedup from limitation 25
    correctly recognized the picture as the same, which is what made the duplication so
-   visually obvious). Fixed by skipping MOTION_DETECTED entirely whenever the AI
-   detector already has something actively tracked — the more specific PERSON_
-   DETECTED/VEHICLE_DETECTED/AI_DETECTION event already covers that same motion, and a
-   bare "something moved" report on top of it adds nothing. A real design decision,
+   visually obvious). Fixed by skipping MOTION_DETECTED entirely within a short grace
+   window of the AI detector's last real detection pass (`self._last_detection_time`)
+   — the more specific PERSON_DETECTED/VEHICLE_DETECTED/AI_DETECTION event already
+   covers that same motion, and a bare "something moved" report on top of it adds
+   nothing. The first version of this fix checked `self._last_tracked` instead and
+   passed its own unit tests, but watching the real deployed camera afterward showed
+   motion still firing constantly — `self._last_tracked` gets reset to `{}` on every
+   AI-frame-skip cycle between actual detection passes (`_run()`'s `elif self._detector:
+   self._last_tracked = self._tracker.update([])`), so it reads as empty most of the
+   time even while a real track is genuinely still alive. Re-verifying against the live
+   camera rather than trusting the test suite alone is what caught this before calling
+   it done. A real design decision,
    not an oversight: this does NOT also try to suppress PERSON_DETECTED relative to a
    following TRIPWIRE_VIOLATION (or a zone violation), because those represent
    genuinely different, both-worth-keeping information (a person is detected vs. that
