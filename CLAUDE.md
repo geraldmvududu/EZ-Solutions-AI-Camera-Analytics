@@ -664,7 +664,7 @@ cd backend && pytest -q      # 220 tests: auth, RBAC, tenant isolation, camera C
                               # file — when free disk space would drop below the
                               # safety margin, and the returned path round-tripping
                               # into a real VIDEO_FILE camera creation)
-cd ai-engine && pytest -q    # 104 tests: centroid tracker (including type-aware
+cd ai-engine && pytest -q    # 106 tests: centroid tracker (including type-aware
                               # matching so a multi-class detector can't let a track
                               # of one object_type steal another's), zone/tripwire
                               # geometry, loitering timer, motion detection (real MOG2 background
@@ -931,7 +931,20 @@ narrowly-scoped IAM key in production — never reuse a broader-privileged crede
    test_tripwire_analysis.py`) — validate the `GATE_JUMP_MIN_VERTICAL_STEP`/
    `GATE_JUMP_VELOCITY_RATIO` constants against real footage once deployed, and treat
    every `GATE_JUMPING_DETECTED` incident as `requires_human_review` (already the
-   default).
+   default). Real bug found live on the deployed VM: a tripwire literally named
+   "Jumping gate" had `gate_jump_detection_enabled=False` — the per-tripwire opt-in
+   checkbox (`ZonesEditor.tsx`, genuinely wired end-to-end) was simply never checked
+   when the tripwire was created, so every crossing was logged as a plain
+   `TRIPWIRE_VIOLATION` and the gate-jump block never ran at all — not a heuristic
+   accuracy problem, a config gap, and the reason a real jump showed up on Events but
+   never on the AI Video Intelligence dashboard (which only surfaces
+   `GATE_JUMPING_DETECTED`/etc. incidents). Fixed live via
+   `PATCH /api/tripwires/{id}`. Separately, `worker.py`'s gate-jump block now logs the
+   real `peak_vertical`/`avg_horizontal` numbers (via the new
+   `tripwire_analysis.py::gate_jump_trajectory_stats`) whenever a crossing is NOT
+   classified as a jump — this heuristic has never been validated against real
+   footage (only synthetic trajectories, see above), so tuning the two constants
+   needs to be based on what a real crossing actually measures as, not a guess.
 17. **Theft/unauthorized-object-removal detection (AI Video Intelligence Phase 2) is
    implemented, with two real, disclosed scope limits.** First, COCO (the dataset the
    new `YoloDetector` — `ai-engine/app/detectors/yolo_detector.py` — is trained on) has

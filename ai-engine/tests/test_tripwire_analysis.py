@@ -3,7 +3,7 @@
 produces (centroid history, crossing timestamps) — no new detector/model involved.
 """
 
-from app.core.tripwire_analysis import TailgatingTracker, gate_jump_confidence
+from app.core.tripwire_analysis import TailgatingTracker, gate_jump_confidence, gate_jump_trajectory_stats
 
 
 def _walk_through(steps: int = 8, y: float = 0.5) -> list[tuple[float, float]]:
@@ -48,6 +48,26 @@ def test_fast_diagonal_walk_is_not_flagged_when_proportional_to_pace():
     # track's own horizontal pace, not just vertical in absolute terms).
     path = [(0.1 + i * 0.2, 0.3 + i * 0.15) for i in range(8)]
     assert gate_jump_confidence(path) is None
+
+
+def test_trajectory_stats_matches_what_confidence_actually_used():
+    """gate_jump_trajectory_stats (added for real diagnostic logging in worker.py —
+    a real gate-jump on the deployed VM wasn't being classified as one, and the only
+    way to tune the heuristic against real footage instead of guessing is to see the
+    actual numbers a real crossing measured as) must report the exact same
+    peak_vertical/avg_horizontal gate_jump_confidence's own decision is based on."""
+    path = _climb_over()
+    stats = gate_jump_trajectory_stats(path)
+    assert stats is not None
+    peak_vertical, avg_horizontal, window_len = stats
+    assert peak_vertical == 0.2
+    assert window_len == 8
+    assert gate_jump_confidence(path) is not None  # sanity: this same path IS flagged
+
+
+def test_trajectory_stats_is_none_for_too_short_a_history():
+    assert gate_jump_trajectory_stats([(0.5, 0.5)]) is None
+    assert gate_jump_trajectory_stats([]) is None
 
 
 def test_tailgating_flags_a_second_different_track_within_window(monkeypatch):

@@ -19,13 +19,16 @@ GATE_JUMP_MIN_VERTICAL_STEP = 0.12
 GATE_JUMP_VELOCITY_RATIO = 2.0
 
 
-def gate_jump_confidence(history: list[tuple[float, float]]) -> float | None:
-    """`history` is a track's recent (x, y) centroid samples, oldest first (see
-    CentroidTracker.history_for) — normalized 0-1 coordinates. Returns a confidence in
-    [0.5, 0.99] if the track's recent trajectory looks like a climb/jump rather than an
-    ordinary walk-through, else None (treat as a normal crossing, matching the
-    platform's existing behavior before this feature existed).
-    """
+def gate_jump_trajectory_stats(history: list[tuple[float, float]]) -> tuple[float, float, int] | None:
+    """The raw numbers gate_jump_confidence's decision is based on — split out so a
+    caller (worker.py logs these at the point of every crossing when the heuristic
+    does NOT fire) can see exactly why a real crossing wasn't classified as a jump,
+    instead of only ever seeing a silent None. Real need: this heuristic was tuned
+    against synthetic trajectories only (see module docstring) — tuning
+    GATE_JUMP_MIN_VERTICAL_STEP/GATE_JUMP_VELOCITY_RATIO against real footage requires
+    seeing what real crossings actually measure as, not guessing blindly.
+    Returns (peak_vertical, avg_horizontal, window_length), or None if there isn't
+    enough history yet to compute anything."""
     window = history[-GATE_JUMP_WINDOW:]
     if len(window) < 3:
         return None
@@ -35,6 +38,20 @@ def gate_jump_confidence(history: list[tuple[float, float]]) -> float | None:
 
     peak_vertical = max(vertical_steps)
     avg_horizontal = sum(horizontal_steps) / len(horizontal_steps)
+    return peak_vertical, avg_horizontal, len(window)
+
+
+def gate_jump_confidence(history: list[tuple[float, float]]) -> float | None:
+    """`history` is a track's recent (x, y) centroid samples, oldest first (see
+    CentroidTracker.history_for) — normalized 0-1 coordinates. Returns a confidence in
+    [0.5, 0.99] if the track's recent trajectory looks like a climb/jump rather than an
+    ordinary walk-through, else None (treat as a normal crossing, matching the
+    platform's existing behavior before this feature existed).
+    """
+    stats = gate_jump_trajectory_stats(history)
+    if stats is None:
+        return None
+    peak_vertical, avg_horizontal, _ = stats
 
     if peak_vertical < GATE_JUMP_MIN_VERTICAL_STEP:
         return None

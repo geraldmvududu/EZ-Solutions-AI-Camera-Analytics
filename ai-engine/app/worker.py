@@ -26,7 +26,13 @@ from app.core.frame_similarity import average_hash, frames_are_duplicates
 from app.core.recorder import SegmentRecorder
 from app.core.snapshotter import save_snapshot
 from app.core.tracker import CentroidTracker
-from app.core.tripwire_analysis import TailgatingTracker, gate_jump_confidence
+from app.core.tripwire_analysis import (
+    GATE_JUMP_MIN_VERTICAL_STEP,
+    GATE_JUMP_VELOCITY_RATIO,
+    TailgatingTracker,
+    gate_jump_confidence,
+    gate_jump_trajectory_stats,
+)
 from app.core.zones import LoiteringTracker, crossed_line, point_in_polygon
 from app.detectors import build_detector
 from app.detectors.base import Detection
@@ -333,7 +339,25 @@ class CameraWorker:
             # tenant-wide kill switch — see tripwire_analysis.py for exactly what this
             # heuristic does and doesn't verify.
             if tripwire.get("gate_jump_detection_enabled") and self.camera.get("gate_jumping_enabled", True):
-                confidence = gate_jump_confidence(self._tracker.history_for(track_id))
+                track_history = self._tracker.history_for(track_id)
+                confidence = gate_jump_confidence(track_history)
+                if confidence is None:
+                    # Real, honest instrumentation for an admittedly-approximate
+                    # heuristic (see tripwire_analysis.py's module docstring): tuned
+                    # only against synthetic trajectories, so seeing what a real
+                    # crossing actually measures as — rather than only ever a silent
+                    # None — is how GATE_JUMP_MIN_VERTICAL_STEP/GATE_JUMP_VELOCITY_RATIO
+                    # get tuned against real footage instead of guessed at blindly.
+                    stats = gate_jump_trajectory_stats(track_history)
+                    if stats is not None:
+                        peak_vertical, avg_horizontal, window_len = stats
+                        logger.info(
+                            "Camera %s: tripwire '%s' crossing by track %s NOT classified as a gate jump "
+                            "(peak_vertical=%.3f avg_horizontal=%.3f window=%d samples — "
+                            "needs peak_vertical>=%.2f AND peak_vertical>=%.1fx avg_horizontal)",
+                            self.camera_id, tripwire["name"], track_id, peak_vertical, avg_horizontal, window_len,
+                            GATE_JUMP_MIN_VERTICAL_STEP, GATE_JUMP_VELOCITY_RATIO,
+                        )
                 if confidence is not None:
                     backend_client.create_event(
                         {
