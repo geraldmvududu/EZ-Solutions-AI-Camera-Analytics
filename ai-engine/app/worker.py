@@ -17,6 +17,7 @@ import cv2
 from app import streaming
 from app.backend_client import backend_client
 from app.config import get_settings
+from app.core.camera_health import CameraObstructionTracker
 from app.core.motion import MotionDetector
 from app.core.object_tracking import AssetZoneTracker
 from app.core.overlay import draw_overlay
@@ -88,6 +89,13 @@ OBJECT_EVENT_COOLDOWN_SECONDS = 30
 # tripwire within the window means only the first is reported.
 TRIPWIRE_VIOLATION_COOLDOWN_SECONDS = 30
 
+# Camera & System Health (Master Development Prompt Phase 1) — see camera_health.py's own
+# docstring for what this heuristic does and does not verify. A brief flicker/motion-blur
+# frame must not fire; only a genuinely sustained block should, and once it does, repeat
+# reports are throttled while the obstruction continues.
+CAMERA_OBSTRUCTION_SUSTAINED_SECONDS = 5.0
+CAMERA_OBSTRUCTION_COOLDOWN_SECONDS = 300
+
 
 class CameraWorker:
     def __init__(self, camera: dict, zones: list[dict], tripwires: list[dict]) -> None:
@@ -108,6 +116,7 @@ class CameraWorker:
         self._loitering = LoiteringTracker()
         self._tailgating = TailgatingTracker()
         self._asset_zone = AssetZoneTracker()
+        self._obstruction = CameraObstructionTracker()
         self._recorder = SegmentRecorder(
             self.camera_id,
             tenant_id=camera.get("tenant_id", ""),
@@ -167,6 +176,12 @@ class CameraWorker:
                     if self.camera["source_type"] == "VIDEO_FILE" and not self.camera.get("loop_video", True):
                         backend_client.mark_video_processed(self.camera_id)
                     break
+
+                # Checked on the raw frame, before privacy masking — a large privacy zone
+                # legitimately blurring most of the view would otherwise itself look like
+                # low-texture "obstruction," which has nothing to do with tampering.
+                if self._obstruction.observe(frame, CAMERA_OBSTRUCTION_SUSTAINED_SECONDS, CAMERA_OBSTRUCTION_COOLDOWN_SECONDS, time.time()):
+                    self._on_camera_obstructed(frame)
 
                 if self._privacy_zones:
                     frame = apply_privacy_masks(frame, self._privacy_zones)
@@ -247,6 +262,22 @@ class CameraWorker:
                 "camera_id": self.camera_id,
                 "event_type": "MOTION_DETECTED",
                 "severity": "INFO",
+                "occurred_at": datetime.now(timezone.utc).isoformat(),
+                "event_metadata": {},
+            }
+        )
+
+    def _on_camera_obstructed(self, frame) -> None:
+        # See camera_health.py's docstring: a real, disclosed heuristic (sustained
+        # near-zero texture or near-total darkness), not a trained tamper classifier —
+        # always requires_human_review downstream, never treated as confirmed tampering.
+        snapshot_id = self._save_and_report_snapshot(frame, None)
+        backend_client.create_event(
+            {
+                "camera_id": self.camera_id,
+                "event_type": "CAMERA_OBSTRUCTED",
+                "severity": "HIGH",
+                "snapshot_id": snapshot_id,
                 "occurred_at": datetime.now(timezone.utc).isoformat(),
                 "event_metadata": {},
             }

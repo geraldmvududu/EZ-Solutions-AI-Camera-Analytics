@@ -94,6 +94,8 @@ export function explainEvent(event: EventItem): string {
       return "The camera came back online.";
     case "CAMERA_OFFLINE":
       return "The camera went offline or stopped reporting a heartbeat.";
+    case "CAMERA_OBSTRUCTED":
+      return "The camera's view has been unusually dark or texture-less for a sustained period — possibly a covered/blocked lens, or the camera pointed at a blank surface. This is a real but approximate heuristic, not a trained tamper-detection model — always verify with a human before treating it as confirmed tampering.";
     case "RECORDING_FAILURE":
       return "The camera's recording pipeline reported a failure.";
     default:

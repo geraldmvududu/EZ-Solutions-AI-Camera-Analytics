@@ -32,6 +32,11 @@ class EventType(str, enum.Enum):
     # detection (backpack/handbag/suitcase only — COCO has no generic box/package
     # class).
     POTENTIAL_THEFT_DETECTED = "POTENTIAL_THEFT_DETECTED"
+    # Master Development Prompt Phase 1, "Camera & System Health" — see
+    # ai-engine/app/core/camera_health.py for the real, disclosed obstruction heuristic
+    # (sustained near-zero-texture or near-total-darkness frame), not a trained tamper
+    # classifier.
+    CAMERA_OBSTRUCTED = "CAMERA_OBSTRUCTED"
 
 
 class EventSeverity(str, enum.Enum):

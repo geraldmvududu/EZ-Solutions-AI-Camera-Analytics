@@ -430,20 +430,39 @@ def get_stream_info_internal(camera_id: uuid.UUID, db: Session = Depends(get_db)
 
 
 @router.post("/{camera_id}/heartbeat", include_in_schema=False, dependencies=[Depends(require_internal_service)])
-def camera_heartbeat(camera_id: uuid.UUID, db: Session = Depends(get_db)) -> dict:
+async def camera_heartbeat(camera_id: uuid.UUID, db: Session = Depends(get_db)) -> dict:
     """Internal endpoint the ai-engine calls periodically while actively processing a
-    camera's stream, used to derive real ONLINE/OFFLINE status (section 33)."""
+    camera's stream, used to derive real ONLINE/OFFLINE status (section 33). The reverse
+    transition (worker.py::check_camera_health flipping a stale camera to OFFLINE) lives in
+    worker/app.py, not here — this endpoint only ever sees a camera that's still alive."""
     from datetime import datetime, timezone
 
     from app.models.camera import CameraStatus
+    from app.models.event import EventSeverity, EventType
+    from app.schemas.event import EventCreate
+    from app.api.routes.events import create_event_and_process
 
     camera = db.get(Camera, camera_id)
     if camera is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Camera not found")
 
+    was_offline = camera.status == CameraStatus.OFFLINE
     camera.last_heartbeat_at = datetime.now(timezone.utc)
     camera.status = CameraStatus.ONLINE
     db.commit()
+
+    if was_offline:
+        await create_event_and_process(
+            db, camera,
+            EventCreate(
+                camera_id=camera.id,
+                event_type=EventType.CAMERA_ONLINE,
+                severity=EventSeverity.LOW,
+                description=f'Camera "{camera.name}" is back online.',
+                occurred_at=datetime.now(timezone.utc),
+            ),
+        )
+
     return {"detail": "ok"}
 
 

@@ -30,6 +30,7 @@ _EVENT_TYPE_CATEGORY: dict[EventType, EventCategory] = {
     EventType.CAMERA_ONLINE: EventCategory.OPERATIONS,
     EventType.RECORDING_FAILURE: EventCategory.OPERATIONS,
     EventType.AI_DETECTION: EventCategory.OPERATIONS,
+    EventType.CAMERA_OBSTRUCTED: EventCategory.OPERATIONS,
 }
 
 

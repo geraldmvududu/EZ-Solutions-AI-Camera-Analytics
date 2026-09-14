@@ -21,6 +21,24 @@ the same per-tenant-cutoff-in-Python pattern, since retention here is governed b
 tenant's RetentionTier, not per-camera. It deletes MinIO/S3 objects via a small,
 standalone boto3 client (this service has no app.config to import object_storage.py
 from) before removing the corresponding row.
+
+check_camera_health (Master Development Prompt Phase 1, "Camera & System Health"): a
+real, previously-missing gap found by direct code read, not by a user bug report —
+`EventType.CAMERA_OFFLINE`/`CAMERA_ONLINE` already existed in the schema, and the
+heartbeat endpoint's own docstring already said it was "used to derive real ONLINE/
+OFFLINE status," but nothing anywhere ever flipped a stale camera to OFFLINE or
+reported either event. A camera whose ai-engine worker crashed, or a VM that lost
+network, just silently stopped heartbeating with no alert, no notification, no record
+— the Cameras page would keep showing "ONLINE" forever. Unlike the hourly retention
+jobs, staleness needs to be caught quickly, so this runs on its own short cadence
+(CAMERA_HEALTH_CHECK_INTERVAL_SECONDS, default 20s) via main()'s per-job next-run
+tracking, not tied to RUN_INTERVAL_SECONDS. It reports through
+`POST /api/events` — the same internal-token-authenticated endpoint ai-engine already
+uses — rather than inserting an Event row directly via SQL like every other function in
+this file, specifically so a stale camera genuinely goes through the real rule engine/
+alert/notification/incident pipeline (the route's own docstring already anticipated
+this: "Called by the AI engine (or the camera-status watchdog)"), not a DB row with no
+downstream effect.
 """
 
 import logging
@@ -28,6 +46,7 @@ import os
 import time
 from datetime import datetime, timedelta, timezone
 
+import httpx
 from sqlalchemy import create_engine, text
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] worker: %(message)s")
@@ -37,6 +56,17 @@ DATABASE_URL = os.environ.get("DATABASE_URL", "postgresql+psycopg://ezsolutions:
 RUN_INTERVAL_SECONDS = int(os.environ.get("RETENTION_CHECK_INTERVAL_SECONDS", "3600"))
 RECORDINGS_ROOT = os.environ.get("RECORDINGS_PATH", "/data/recordings")
 SNAPSHOTS_ROOT = os.environ.get("SNAPSHOTS_PATH", "/data/snapshots")
+
+# Camera & system health (Master Development Prompt Phase 1) — see check_camera_health's
+# own docstring. API_URL/INTERNAL_SERVICE_TOKEN mirror ai-engine's own backend_client.py
+# defaults exactly, since this is the same kind of internal-service HTTP call.
+API_URL = os.environ.get("API_URL", "http://localhost:8000")
+INTERNAL_SERVICE_TOKEN = os.environ.get("INTERNAL_SERVICE_TOKEN", "dev-only-internal-service-token")
+CAMERA_HEALTH_CHECK_INTERVAL_SECONDS = int(os.environ.get("CAMERA_HEALTH_CHECK_INTERVAL_SECONDS", "20"))
+# 3x the ai-engine's own default heartbeat-post interval (camera_heartbeat_interval_seconds
+# = 10s in ai-engine/app/config.py) — tolerates a couple of missed/slow heartbeats before
+# concluding the camera is genuinely gone, rather than flapping on normal jitter.
+CAMERA_OFFLINE_TIMEOUT_SECONDS = int(os.environ.get("CAMERA_OFFLINE_TIMEOUT_SECONDS", "30"))
 # Real incident on the deployed VM: a camera-delete race (its ai-engine worker was
 # still writing/registering a recording in the moment the camera row was deleted) and
 # a transcode process killed mid-write during an unrelated disk-full crash both left
@@ -377,19 +407,78 @@ def cleanup_orphaned_media_files() -> None:
         logger.info("Removed %d orphaned media file(s) with no referencing database row", removed)
 
 
+def _report_event(camera_id: str, event_type: str, severity: str, description: str) -> None:
+    try:
+        httpx.post(
+            f"{API_URL}/api/events",
+            json={
+                "camera_id": camera_id,
+                "event_type": event_type,
+                "severity": severity,
+                "description": description,
+                "occurred_at": datetime.now(timezone.utc).isoformat(),
+            },
+            headers={"X-Internal-Token": INTERNAL_SERVICE_TOKEN},
+            timeout=10.0,
+        )
+    except Exception as exc:
+        logger.warning("Could not report %s event for camera %s: %s", event_type, camera_id, exc)
+
+
+def check_camera_health() -> None:
+    """See this module's docstring. Flips any camera still marked ONLINE whose
+    last_heartbeat_at has gone stale past CAMERA_OFFLINE_TIMEOUT_SECONDS to OFFLINE and
+    reports a real CAMERA_OFFLINE event for it. The reverse transition (OFFLINE -> ONLINE)
+    is handled where it's actually observed — the heartbeat endpoint itself
+    (backend/app/api/routes/cameras.py::camera_heartbeat) — not here, since this function
+    only ever runs against cameras that have gone quiet, never ones that just came back."""
+    cutoff = datetime.now(timezone.utc) - timedelta(seconds=CAMERA_OFFLINE_TIMEOUT_SECONDS)
+    with engine.begin() as conn:
+        rows = conn.execute(
+            text(
+                """
+                SELECT id, name FROM cameras
+                WHERE status = 'ONLINE' AND last_heartbeat_at IS NOT NULL AND last_heartbeat_at < :cutoff
+                """
+            ),
+            {"cutoff": cutoff},
+        ).fetchall()
+        for row in rows:
+            conn.execute(text("UPDATE cameras SET status = 'OFFLINE' WHERE id = :id"), {"id": row.id})
+
+    for row in rows:
+        _report_event(str(row.id), "CAMERA_OFFLINE", "MEDIUM", f'Camera "{row.name}" stopped sending heartbeats and was marked offline.')
+
+    if rows:
+        logger.info("Marked %d camera(s) offline due to a stale heartbeat", len(rows))
+
+
 def main() -> None:
-    logger.info("Retention worker starting — checking every %ds", RUN_INTERVAL_SECONDS)
+    logger.info(
+        "Retention worker starting — retention checks every %ds, camera-health checks every %ds",
+        RUN_INTERVAL_SECONDS,
+        CAMERA_HEALTH_CHECK_INTERVAL_SECONDS,
+    )
+    next_retention_run = 0.0
     while True:
         try:
-            cleanup_recordings()
-            cleanup_snapshots()
-            cleanup_face_recognition_events()
-            cleanup_face_profiles()
-            cleanup_expired_cloud_evidence()
-            cleanup_orphaned_media_files()
+            check_camera_health()
         except Exception:
-            logger.exception("Retention pass failed")
-        time.sleep(RUN_INTERVAL_SECONDS)
+            logger.exception("Camera health check failed")
+
+        if time.monotonic() >= next_retention_run:
+            try:
+                cleanup_recordings()
+                cleanup_snapshots()
+                cleanup_face_recognition_events()
+                cleanup_face_profiles()
+                cleanup_expired_cloud_evidence()
+                cleanup_orphaned_media_files()
+            except Exception:
+                logger.exception("Retention pass failed")
+            next_retention_run = time.monotonic() + RUN_INTERVAL_SECONDS
+
+        time.sleep(CAMERA_HEALTH_CHECK_INTERVAL_SECONDS)
 
 
 if __name__ == "__main__":

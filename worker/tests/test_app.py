@@ -98,8 +98,32 @@ def db(monkeypatch):
                 recording_id TEXT
             )
         """))
+        conn.execute(text("""
+            CREATE TABLE cameras (
+                id TEXT PRIMARY KEY,
+                name TEXT NOT NULL,
+                status TEXT NOT NULL,
+                last_heartbeat_at TIMESTAMP
+            )
+        """))
     monkeypatch.setattr(worker_app, "engine", engine)
     return engine
+
+
+@pytest.fixture
+def mock_report_event(monkeypatch):
+    """check_camera_health reports real events over HTTP (POST /api/events, the same
+    internal-token-authenticated endpoint ai-engine already uses) rather than inserting a
+    row directly — mock that HTTP boundary the same way mock_cloud_delete mocks the S3
+    boundary, and record what was reported so tests can assert on it."""
+    reported = []
+    monkeypatch.setattr(
+        worker_app, "_report_event",
+        lambda camera_id, event_type, severity, description: reported.append(
+            {"camera_id": camera_id, "event_type": event_type, "severity": severity, "description": description}
+        ),
+    )
+    return reported
 
 
 @pytest.fixture
@@ -184,6 +208,68 @@ def _insert_event(db, tenant_id: str, age_days: int) -> str:
             {"id": row_id, "t": tenant_id, "ts": datetime.now(timezone.utc) - timedelta(days=age_days)},
         )
     return row_id
+
+
+def _insert_camera(db, name: str, status: str, heartbeat_age_seconds: float | None) -> str:
+    row_id = _uid()
+    heartbeat_at = None if heartbeat_age_seconds is None else datetime.now(timezone.utc) - timedelta(seconds=heartbeat_age_seconds)
+    with db.begin() as conn:
+        conn.execute(
+            text("INSERT INTO cameras (id, name, status, last_heartbeat_at) VALUES (:id, :n, :s, :h)"),
+            {"id": row_id, "n": name, "s": status, "h": heartbeat_at},
+        )
+    return row_id
+
+
+def _camera_status(db, camera_id: str) -> str:
+    with db.begin() as conn:
+        return conn.execute(text("SELECT status FROM cameras WHERE id = :id"), {"id": camera_id}).scalar_one()
+
+
+def test_check_camera_health_marks_stale_online_camera_offline(db, mock_report_event, monkeypatch):
+    monkeypatch.setattr(worker_app, "CAMERA_OFFLINE_TIMEOUT_SECONDS", 30)
+    stale_id = _insert_camera(db, "Stale Cam", "ONLINE", heartbeat_age_seconds=60)
+
+    worker_app.check_camera_health()
+
+    assert _camera_status(db, stale_id) == "OFFLINE"
+    assert len(mock_report_event) == 1
+    assert mock_report_event[0]["camera_id"] == stale_id
+    assert mock_report_event[0]["event_type"] == "CAMERA_OFFLINE"
+    assert mock_report_event[0]["severity"] == "MEDIUM"
+
+
+def test_check_camera_health_leaves_fresh_heartbeat_camera_alone(db, mock_report_event, monkeypatch):
+    monkeypatch.setattr(worker_app, "CAMERA_OFFLINE_TIMEOUT_SECONDS", 30)
+    fresh_id = _insert_camera(db, "Fresh Cam", "ONLINE", heartbeat_age_seconds=5)
+
+    worker_app.check_camera_health()
+
+    assert _camera_status(db, fresh_id) == "ONLINE"
+    assert mock_report_event == []
+
+
+def test_check_camera_health_ignores_already_offline_cameras(db, mock_report_event, monkeypatch):
+    """A camera already marked OFFLINE (e.g. by a previous check_camera_health pass, or one
+    that was never started) must not report a second, redundant CAMERA_OFFLINE event every
+    cycle forever."""
+    monkeypatch.setattr(worker_app, "CAMERA_OFFLINE_TIMEOUT_SECONDS", 30)
+    _insert_camera(db, "Already Offline", "OFFLINE", heartbeat_age_seconds=9999)
+
+    worker_app.check_camera_health()
+
+    assert mock_report_event == []
+
+
+def test_check_camera_health_ignores_a_camera_that_has_never_heartbeated(db, mock_report_event, monkeypatch):
+    """last_heartbeat_at IS NULL (a camera that's never actually run) must not be treated
+    as "stale" — there's nothing to time out yet, and it isn't marked ONLINE anyway."""
+    monkeypatch.setattr(worker_app, "CAMERA_OFFLINE_TIMEOUT_SECONDS", 30)
+    _insert_camera(db, "Never Run", "OFFLINE", heartbeat_age_seconds=None)
+
+    worker_app.check_camera_health()
+
+    assert mock_report_event == []
 
 
 def test_cleanup_expired_cloud_evidence_purges_old_snapshot_and_object(db, mock_cloud_delete):

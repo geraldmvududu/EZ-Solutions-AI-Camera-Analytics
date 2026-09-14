@@ -112,15 +112,14 @@ def add_event_notes(
     return event
 
 
-@router.post("", response_model=EventResponse, status_code=status.HTTP_201_CREATED, dependencies=[Depends(require_internal_service)])
-async def create_event(payload: EventCreate, db: Session = Depends(get_db)) -> Event:
-    """Called by the AI engine (or the camera-status watchdog) whenever a real event
-    occurs. Runs the rule engine synchronously and broadcasts the result over the
-    tenant's WebSocket channel so the dashboard updates without a page refresh."""
-    camera = db.get(Camera, payload.camera_id)
-    if camera is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Camera not found")
-
+async def create_event_and_process(db: Session, camera: Camera, payload: EventCreate) -> Event:
+    """The real event-ingestion pipeline: create the Event, run the rule engine, broadcast
+    over the tenant's WebSocket channel, notify eligible users, and auto-create an Incident
+    when warranted. Factored out of the create_event route so a second internal caller —
+    the heartbeat endpoint's OFFLINE->ONLINE transition (backend/app/api/routes/
+    cameras.py::camera_heartbeat) — gets the exact same real pipeline (a CAMERA_ONLINE event
+    genuinely goes through rule_engine/notifications like any other) rather than a
+    hand-rolled duplicate or a bare DB insert with no downstream effect."""
     event = Event(tenant_id=camera.tenant_id, event_category=classify_event(payload.event_type), **payload.model_dump())
     db.add(event)
     db.commit()
@@ -158,3 +157,14 @@ async def create_event(payload: EventCreate, db: Session = Depends(get_db)) -> E
         })
 
     return event
+
+
+@router.post("", response_model=EventResponse, status_code=status.HTTP_201_CREATED, dependencies=[Depends(require_internal_service)])
+async def create_event(payload: EventCreate, db: Session = Depends(get_db)) -> Event:
+    """Called by the AI engine or worker.py's camera-health check whenever a real event
+    occurs."""
+    camera = db.get(Camera, payload.camera_id)
+    if camera is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Camera not found")
+
+    return await create_event_and_process(db, camera, payload)

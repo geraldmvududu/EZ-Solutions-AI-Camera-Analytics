@@ -679,6 +679,74 @@ real: reloaded the Cameras and Zones & Tripwires pages against the now-restarted
 server and confirmed the existing "Main Gate" camera, its zones, and its tripwires
 all survived the switch unchanged.
 
+**Master Development Prompt Phase 1 — Camera & System Health** (`worker/app.py`,
+`ai-engine/app/core/camera_health.py`): the user supplied a 44-section "Master
+Development Prompt" asking for an enterprise AI security SaaS across 11 modules.
+Investigation found most of it already exists under other names (theft, person
+security, perimeter/intrusion, incident management, risk scoring, notifications,
+reporting), a meaningful slice needs trained models this offline-build environment
+cannot reliably obtain (weapons/fire/PPE/fights/fall detection — the user explicitly
+chose to skip these rather than ship something that looks reliable but isn't, since a
+false negative on "fire" or "weapon" in a paying customer's security product is a
+safety/liability issue), and the user picked 4 genuinely buildable areas for a first
+phase: Camera & System Health, Multi-event Incident Correlation, License Plate Reading,
+Crowd/Occupancy Counting — built and verified one at a time. This is the first.
+
+Real, previously-missing gap found by direct code read, not a bug report:
+`EventType.CAMERA_OFFLINE`/`CAMERA_ONLINE` already existed in the schema, and the
+heartbeat endpoint's own docstring already said it was "used to derive real ONLINE/
+OFFLINE status," but nothing anywhere ever created either event or flipped a stale
+camera back to OFFLINE — a camera whose ai-engine worker crashed, or a VM that lost
+network, just silently stopped heartbeating with no alert, no notification, no record,
+and the Cameras page kept showing "ONLINE" forever.
+
+- `worker/app.py::check_camera_health()` runs on its own short cadence
+  (`CAMERA_HEALTH_CHECK_INTERVAL_SECONDS`, default 20s) — `main()`'s single flat
+  `while True` loop (previously one shared `RETENTION_CHECK_INTERVAL_SECONDS`, default
+  3600s, for every job) now tracks the hourly retention jobs' next-run time separately,
+  so a fast health check and the slow retention passes coexist in one process without a
+  scheduler dependency. It flips any camera still `ONLINE` whose `last_heartbeat_at` is
+  older than `CAMERA_OFFLINE_TIMEOUT_SECONDS` (default 30s — 3x ai-engine's own 10s
+  heartbeat-post interval, tolerating a couple of missed beats before concluding the
+  camera is genuinely gone) to `OFFLINE`, then reports a real `CAMERA_OFFLINE` event.
+- Unlike every other function in `worker/app.py` (which write directly to Postgres via
+  plain SQL), this reports through `POST /api/events` — the same internal-token-
+  authenticated endpoint ai-engine already uses — specifically so a stale camera
+  genuinely goes through the real rule-engine/alert/notification/incident pipeline
+  (the route's own docstring already anticipated this: "Called by the AI engine (or the
+  camera-status watchdog)"), not a bare DB row with no downstream effect. `worker`'s
+  `docker-compose.yml` service gained `API_URL: http://backend:8000` (mirroring
+  ai-engine's own override) and a `depends_on: backend` entry.
+- The reverse transition lives where it's actually observed: `backend/app/api/routes/
+  cameras.py::camera_heartbeat` now checks whether the camera's prior status was
+  `OFFLINE` before overwriting it — only on that genuine transition (not every ~10s
+  heartbeat while already online) does it create a `CAMERA_ONLINE` event. Both routes
+  share one reusable pipeline function, `events.py::create_event_and_process`
+  (extracted from `create_event`'s body — create the Event, run the rule engine,
+  broadcast, notify, maybe auto-create an Incident), so a `CAMERA_ONLINE`/
+  `CAMERA_OFFLINE` event gets the exact same real treatment as every other event type
+  with zero duplicated logic.
+- `ai-engine/app/core/camera_health.py::CameraObstructionTracker` is a real, disclosed
+  heuristic for lens obstruction/tampering — NOT a trained tamper classifier, no such
+  model exists in this environment. Reuses the exact brightness/Laplacian-variance
+  primitives already proven in `face_embedding.py`'s quality scoring, applied to the
+  whole frame (checked before privacy-zone masking, so a camera with a large PRIVACY
+  zone doesn't look artificially "obstructed"). A sustained (default 5s) near-zero-
+  texture or near-total-darkness frame reports `CAMERA_OBSTRUCTED` (HIGH severity),
+  throttled to at most once per `CAMERA_OBSTRUCTION_COOLDOWN_SECONDS` (default 300s)
+  while it continues. Honest limitation, disclosed in the code and in
+  `explainEvent.ts`'s description for this event type: this cannot distinguish "the
+  lens is covered" from "the camera is legitimately pointed at a blank wall, or
+  operating in true darkness with no IR illumination" — every `CAMERA_OBSTRUCTED` event
+  needs human review, same as every AI Video Intelligence incident type.
+- Real bug caught by this feature's own new unit tests before it ever ran live:
+  `CameraObstructionTracker`'s cooldown timer defaulted `_last_reported_at` to `0.0`,
+  which made the very first-ever firing falsely look like it was "still in cooldown"
+  whenever `now` was a small value close to 0 — harmless with real wall-clock epoch
+  time (always huge, so `now - 0.0` trivially exceeds any real cooldown), but wrong by
+  construction. Fixed by initializing to `float("-inf")`, the same
+  never-yet-reported-means-never-in-cooldown fix this project has applied elsewhere.
+
 ## Development commands
 
 ```bash
@@ -701,7 +769,7 @@ cd ai-engine && python -m app.main
 ## Testing commands
 
 ```bash
-cd backend && pytest -q      # 233 tests: auth, RBAC, tenant isolation, camera CRUD
+cd backend && pytest -q      # 238 tests: auth, RBAC, tenant isolation, camera CRUD
                               # (including the delete cascade covering every dependent
                               # table), credential encryption, rule engine, analytics
                               # aggregates, report export, the Redis-backed rate limiter
@@ -789,8 +857,15 @@ cd backend && pytest -q      # 233 tests: auth, RBAC, tenant isolation, camera C
                               # disables throttling, and it's scoped per (camera,
                               # incident_type) so a genuinely different incident type
                               # on the same camera — e.g. a real theft right after an
-                              # unrelated gate-jump — still gets its own Incident)
-cd ai-engine && pytest -q    # 116 tests: centroid tracker (including type-aware
+                              # unrelated gate-jump — still gets its own Incident), and
+                              # the camera heartbeat OFFLINE->ONLINE transition (Master
+                              # Development Prompt Phase 1 — a heartbeat while already
+                              # ONLINE never creates a duplicate CAMERA_ONLINE event, a
+                              # heartbeat arriving after the camera was marked OFFLINE
+                              # creates exactly one, and both the internal-token and
+                              # unknown-camera-404 gates are enforced the same way every
+                              # other internal endpoint already is)
+cd ai-engine && pytest -q    # 124 tests: centroid tracker (including type-aware
                               # matching so a multi-class detector can't let a track
                               # of one object_type steal another's), zone/tripwire
                               # geometry, loitering timer, motion detection (real MOG2 background
@@ -867,8 +942,16 @@ cd ai-engine && pytest -q    # 116 tests: centroid tracker (including type-aware
                               # grace window expires, and — the exact real bug this
                               # fix's first version had — suppression survives a skip
                               # frame resetting self._last_tracked to `{}`, since the
-                              # gate is keyed on self._last_detection_time instead)
-cd worker && pytest -q       # 21 tests: retention cleanup for recordings/snapshots/
+                              # gate is keyed on self._last_detection_time instead),
+                              # and CameraObstructionTracker (Master Development Prompt
+                              # Phase 1 — a real, disclosed low-texture/low-brightness
+                              # heuristic: a brief dip never fires, a sustained
+                              # obstruction fires once, repeat firings are throttled by
+                              # cooldown, and a genuine frame in between resets the
+                              # streak — plus the real "never-yet-fired must never look
+                              # like it's in cooldown" bug this test suite itself caught
+                              # before it ever ran live, from a 0.0 cooldown-timer default)
+cd worker && pytest -q       # 25 tests: retention cleanup for recordings/snapshots/
                               # face-recognition-events/face-profiles against a real
                               # SQLite DB with a hand-crafted minimal schema (the
                               # service's first-ever tests), plus
@@ -884,7 +967,15 @@ cd worker && pytest -q       # 21 tests: retention cleanup for recordings/snapsh
                               # referencing recordings/snapshots row at all is removed,
                               # one referenced by either table is kept, anything younger
                               # than the grace period is left alone even with no
-                              # referencing row, and missing directories don't crash it)
+                              # referencing row, and missing directories don't crash it),
+                              # and check_camera_health (Master Development Prompt
+                              # Phase 1 — a stale-heartbeat ONLINE camera is marked
+                              # OFFLINE and reports exactly one real event over HTTP
+                              # through POST /api/events, a fresh-heartbeat camera is
+                              # left alone, an already-OFFLINE camera is never
+                              # re-reported every cycle, and a camera with no heartbeat
+                              # at all yet is correctly ignored rather than treated as
+                              # newly stale)
 cd frontend && npm run build # TypeScript strict-mode compile + production bundle
 ```
 
@@ -1310,6 +1401,14 @@ narrowly-scoped IAM key in production — never reuse a broader-privileged crede
    frame), not something that should be deduplicated without losing their actual
    purpose. Nothing new was built for those three — confirmed already correct rather
    than assumed to be, or "fixed" with an unneeded mechanism.
+30. **`CameraObstructionTracker` (Master Development Prompt Phase 1) is a real, disclosed
+   heuristic, not a trained tamper-detection classifier** — no such model exists in this
+   offline-build environment. A sustained near-zero-texture or near-total-darkness frame
+   is a real, strong signal that a lens is covered/blocked, but it is also exactly what a
+   camera legitimately pointed at a blank wall, or operating in true darkness with no IR
+   illumination, looks like. This heuristic cannot tell those two apart — every
+   `CAMERA_OBSTRUCTED` event needs human review, the same way every AI Video Intelligence
+   incident type already does, and must never be treated as confirmed proof of tampering.
 
 ## Current implementation status
 
@@ -1327,6 +1426,7 @@ narrowly-scoped IAM key in production — never reuse a broader-privileged crede
 | 10. Facial Recognition & Identity Analytics | Phase 1 + Phase 2 done, tested, verified in a real browser — enroll/manage people, real detect→embed→match pipeline, recognition events feeding the existing event/alert/rule/notification/WebSocket pipeline, camera + zone config, human review, identified-person violation → auto-Incident, recordings linked to face/violation events with in-browser seekable playback, multi-frame confirmation, liveness (narrow scope, limitation 12), retention enforcement, and a CSV appearance-history export. Full drag-and-drop rules-builder UI is still out of scope (rules are managed via the existing generic Rules page) |
 | 11. AI Video Intelligence | Phase 1 + Phase 2 done, tested, verified in a real browser — gate-jumping/climbing (heuristic), tailgating, restricted-area, and now potential-theft detection (real YOLOv8n multi-class detector, opt-in per camera; backpack/handbag/suitcase removal from a monitored zone) extending the existing tripwire/zone pipeline; a real, transparent risk score; auto-created Incidents with a template-based (not LLM) AI summary; real ffmpeg-trimmed evidence clips; a dashboard and settings page; a PDF report section. Abandoned-object detection (not requested) and fall detection (Phase 3, needs pose estimation) are deliberately not built yet — see limitations 17-19 |
 | 12. Event-First Cloud Storage | Phase 1 done, tested — Site hierarchy (Customer → Site → Camera), a real object-storage abstraction (MinIO in dev / real AWS S3 in production, same code path) with presigned-URL serving, configurable per-tenant retention tiers with worker-side enforcement, per-event review/notes/categorization with real filter UI on Events/Alerts, a storage-usage dashboard, and a new SECURITY_MANAGER role. See limitations 20-22 for the explicit out-of-scope list (multi-channel alerts, offline edge queue-and-sync, generalized dedup/cooldown config, per-user site-level RBAC, S3 lifecycle policies, AWS Cost Explorer billing) |
+| 13. Master Development Prompt Phase 1 | Sub-phase 1 (Camera & System Health) done, tested, verified live — real auto-offline detection on heartbeat staleness, real OFFLINE→ONLINE transition event, and a disclosed (not trained) lens-obstruction heuristic. Sub-phases 2-4 (multi-event incident correlation, license plate reading/ANPR, crowd/occupancy counting) in progress. Weapons, fire/smoke, PPE, fight/violence, and fall detection deliberately skipped — no trained model this environment can obtain/verify exists for any of them, and the user chose honesty over a feature that looks reliable but isn't for safety-critical categories |
 
 ## Verified end-to-end (not just "should work")
 
@@ -1769,3 +1869,28 @@ narrowly-scoped IAM key in production — never reuse a broader-privileged crede
   `healthy`, backend `healthy`, `/dashboard` returns real data again, and TRIPWIRE_
   VIOLATION event volume for the post-fix period stayed at the expected ~1-per-25s
   cadence with no other event type showing runaway duplication.
+- **Master Development Prompt Phase 1 — Camera & System Health, end-to-end against the
+  real local dev stack (backend + a real running ai-engine process, not mocked).**
+  Stopped the real ai-engine process, then set the "Main Gate" camera's
+  `last_heartbeat_at` 90s stale (well past the 30s `CAMERA_OFFLINE_TIMEOUT_SECONDS`) and
+  ran `worker/app.py::check_camera_health()` directly against the same dev database and
+  backend (`API_URL=http://localhost:8001`). Confirmed in the real browser: the Cameras
+  page immediately showed the camera `OFFLINE`, and the Events page showed a real
+  `CAMERA OFFLINE / OPERATIONS / MEDIUM / UNREVIEWED` row with the exact expected
+  description. Then restarted the real ai-engine process and watched it discover the
+  camera and send its next real heartbeat: the Cameras page flipped back to `ONLINE`
+  within seconds, and a `CAMERA ONLINE / OPERATIONS / LOW` event appeared at the same
+  timestamp — confirming the OFFLINE->ONLINE transition genuinely fires from
+  `camera_heartbeat`'s own new logic, not just from the worker script. One real
+  test-setup pitfall caught and fixed before this worked: an initial attempt to set the
+  stale timestamp via a raw `sqlite3` connection (bypassing SQLAlchemy) used a
+  differently-formatted timestamp string than what the app itself writes, so the
+  staleness comparison silently never matched — switched to setting it through
+  SQLAlchemy's own `text()` engine (the same path `check_camera_health` itself uses) to
+  get a consistent format, which then worked immediately. `CameraObstructionTracker`
+  (the tamper/obstruction heuristic) is covered by 7 real unit tests but was not
+  triggered live in this pass — the SIMULATED camera's synthetic scene has real texture,
+  so there's no live fixture in this environment that would naturally produce a
+  near-zero-variance frame; the same honest verification boundary already applied to
+  AI Video Intelligence Phase 1/2's synthetic-camera limits. `cd backend && pytest -q`
+  (238), `cd ai-engine && pytest -q` (124), and `cd worker && pytest -q` (25) all green.
