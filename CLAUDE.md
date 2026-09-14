@@ -549,6 +549,32 @@ camera scoping works everywhere.
   cooldown config framework, per-user site-level RBAC, S3 lifecycle/archival policies,
   and AWS Cost Explorer billing integration.
 
+**External footage upload** (`POST /api/cameras/upload-video`): requested by the user
+directly — a way to feed in footage from an external source (a hard drive, an old
+DVR/NVR export) rather than requiring a live camera. `VIDEO_FILE` cameras already
+supported this architecturally (any server-side path plays/loops/gets analyzed exactly
+like a live source); the actual gap was that `video_file_path` could only ever be a
+path someone had already SCP'd onto the server by hand — there was no way to get a
+file from wherever it's actually stored (almost always the *user's own machine*, not
+this server) onto disk at all. `nginx.conf`'s `client_max_body_size 2G` had been sized
+for this from the original spec, but no endpoint ever actually implemented it until
+now. The browser reads the file locally (from a plugged-in external drive, same as
+any other file picker) and streams it to this endpoint, which writes it to
+`{upload_path}/{tenant_id}/{uuid}{ext}` in real chunks (never buffered fully in
+memory — a multi-GB video would otherwise be a real way to exhaust the container's
+RAM) and returns the resulting path for `Cameras.tsx`'s create/edit form to drop
+straight into `video_file_path`. A real, live disk-space check runs on every chunk
+written (not just once up front): the exact incident this same session found live on
+the deployed VM — the disk hit 100% and Postgres PANICked — must never be triggered by
+an upload itself, so a write that would drop free space below a safety margin aborts
+immediately and deletes the partial file rather than continuing into the danger zone.
+Deliberately does NOT attempt to mount an actual physical drive into the container —
+the drive is attached to the user's own computer, not the server, so a browser upload
+is the correct bridge, not a device-mount (which would need host-level Docker config
+this platform has no way to offer generically anyway). One video per camera, matching
+the existing model — a user with many files on their drive repeats upload+create per
+file, the same granularity every other VIDEO_FILE camera already has.
+
 ## Development commands
 
 ```bash
@@ -571,7 +597,7 @@ cd ai-engine && python -m app.main
 ## Testing commands
 
 ```bash
-cd backend && pytest -q      # 215 tests: auth, RBAC, tenant isolation, camera CRUD
+cd backend && pytest -q      # 220 tests: auth, RBAC, tenant isolation, camera CRUD
                               # (including the delete cascade covering every dependent
                               # table), credential encryption, rule engine, analytics
                               # aggregates, report export, the Redis-backed rate limiter
@@ -630,7 +656,14 @@ cd backend && pytest -q      # 215 tests: auth, RBAC, tenant isolation, camera C
                               # deployed VM (delete_camera not cleaning up Notification/
                               # incident_alerts/Incident references, delete_rule having
                               # no dependent-row handling at all) — all against a real
-                              # in-memory SQLite DB through the actual FastAPI app
+                              # in-memory SQLite DB through the actual FastAPI app,
+                              # and the video-file upload endpoint (real streamed
+                              # bytes written to disk and read back byte-for-byte,
+                              # rejecting an unsupported extension, requiring
+                              # manage_cameras, refusing — and cleaning up the partial
+                              # file — when free disk space would drop below the
+                              # safety margin, and the returned path round-tripping
+                              # into a real VIDEO_FILE camera creation)
 cd ai-engine && pytest -q    # 104 tests: centroid tracker (including type-aware
                               # matching so a multi-class detector can't let a track
                               # of one object_type steal another's), zone/tripwire

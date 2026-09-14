@@ -37,6 +37,22 @@ function CameraFormModal({
   const [multiClassDetectionEnabled, setMultiClassDetectionEnabled] = useState(camera?.multi_class_detection_enabled ?? false);
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
+  const [uploading, setUploading] = useState(false);
+  const [uploadedFileName, setUploadedFileName] = useState<string | null>(null);
+
+  async function handleFileUpload(file: File) {
+    setUploading(true);
+    setError(null);
+    try {
+      const result = await camerasApi.uploadCameraVideo(file);
+      setVideoFilePath(result.video_file_path);
+      setUploadedFileName(file.name);
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : "Failed to upload video file");
+    } finally {
+      setUploading(false);
+    }
+  }
 
   async function handleSubmit(e: FormEvent) {
     e.preventDefault();
@@ -102,9 +118,25 @@ function CameraFormModal({
         </div>
 
         {sourceType === "VIDEO_FILE" && (
-          <div>
-            <label className="block text-xs text-slate-400 mb-1">Video file path (on server, e.g. /data/uploads/front_gate.mp4)</label>
-            <input value={videoFilePath} onChange={(e) => setVideoFilePath(e.target.value)} className="w-full rounded bg-base-800 border border-base-600 px-3 py-1.5 text-sm text-slate-100" />
+          <div className="space-y-2">
+            <div>
+              <label className="block text-xs text-slate-400 mb-1">
+                Upload a video file (e.g. footage copied from an external hard drive)
+              </label>
+              <input
+                type="file"
+                accept="video/*,.mp4,.avi,.mov,.mkv,.webm"
+                disabled={uploading}
+                onChange={(e) => e.target.files?.[0] && handleFileUpload(e.target.files[0])}
+                className="w-full text-sm text-slate-300 file:mr-3 file:rounded file:border-0 file:bg-accent-600 file:px-3 file:py-1.5 file:text-sm file:text-white hover:file:bg-accent-500"
+              />
+              {uploading && <p className="text-xs text-slate-500 mt-1">Uploading...</p>}
+              {!uploading && uploadedFileName && <p className="text-xs text-accent-500 mt-1">Uploaded: {uploadedFileName}</p>}
+            </div>
+            <div>
+              <label className="block text-xs text-slate-400 mb-1">Or enter a path already on the server (e.g. /data/uploads/front_gate.mp4)</label>
+              <input value={videoFilePath} onChange={(e) => setVideoFilePath(e.target.value)} className="w-full rounded bg-base-800 border border-base-600 px-3 py-1.5 text-sm text-slate-100" />
+            </div>
           </div>
         )}
 
@@ -194,7 +226,7 @@ function CameraFormModal({
           <button type="button" onClick={onClose} className="px-3 py-1.5 text-sm rounded border border-base-600 text-slate-300">
             Cancel
           </button>
-          <button type="submit" disabled={submitting} className="px-3 py-1.5 text-sm rounded bg-accent-600 hover:bg-accent-500 text-white disabled:opacity-50">
+          <button type="submit" disabled={submitting || uploading} className="px-3 py-1.5 text-sm rounded bg-accent-600 hover:bg-accent-500 text-white disabled:opacity-50">
             {submitting ? "Saving..." : isEdit ? "Save Changes" : "Create Camera"}
           </button>
         </div>

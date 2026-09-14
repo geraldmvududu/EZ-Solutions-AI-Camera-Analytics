@@ -1,4 +1,5 @@
 import os
+import shutil
 import socket
 import uuid
 from collections.abc import AsyncIterator
@@ -6,7 +7,7 @@ from urllib.parse import urlparse
 
 import httpx
 import sqlalchemy as sa
-from fastapi import APIRouter, Depends, HTTPException, Request, status
+from fastapi import APIRouter, Depends, File, HTTPException, Request, UploadFile, status
 from fastapi.responses import StreamingResponse
 from jose import JWTError
 from sqlalchemy.orm import Session
@@ -36,6 +37,22 @@ from app.schemas.camera import CameraCreate, CameraInternalResponse, CameraRespo
 
 router = APIRouter(prefix="/cameras", tags=["cameras"])
 settings = get_settings()
+
+# Video-file upload (section 46 of the original spec — nginx.conf's own
+# client_max_body_size 2G comment already referenced this, but no endpoint ever
+# actually implemented it until now): lets an admin feed in footage from an external
+# source (a hard drive, an old DVR/NVR export, ...) instead of requiring a live camera.
+# The browser reads the file from wherever it's actually stored (the user's own
+# machine — never this server) and streams it here; VIDEO_FILE cameras already treat
+# any server-side path identically whether it arrived this way or was typed in by
+# hand, so this needed no new camera-model/ai-engine code, only a real upload path.
+ALLOWED_VIDEO_EXTENSIONS = {".mp4", ".avi", ".mov", ".mkv", ".webm"}
+UPLOAD_CHUNK_BYTES = 1024 * 1024  # 1MB — streamed, never buffered fully in memory
+# Real incident this session: the VM's disk hit 100% and took Postgres down with it.
+# An upload must never be the thing that does that again — abort (and delete the
+# partial file) the moment free space would drop below this margin, checked on every
+# chunk actually written, not just once up front.
+MIN_FREE_DISK_BYTES_AFTER_UPLOAD = 500 * 1024 * 1024
 
 
 def _get_owned_camera(db: Session, camera_id: uuid.UUID, user: User) -> Camera:
@@ -155,6 +172,61 @@ def create_camera(
         details={"name": camera.name, "source_type": camera.source_type.value},
     )
     return camera
+
+
+@router.post("/upload-video")
+async def upload_video(
+    request: Request,
+    video: UploadFile = File(...),
+    db: Session = Depends(get_db),
+    user: User = Depends(require_permission(Permissions.MANAGE_CAMERAS)),
+) -> dict:
+    """Streams an uploaded video file to disk and returns the resulting path, for use
+    as a VIDEO_FILE camera's video_file_path — see this module's constants above for
+    why streaming (not buffering in memory) and a live disk-space check (not just an
+    upfront one) both matter here."""
+    filename = os.path.basename(video.filename or "upload")
+    ext = os.path.splitext(filename)[1].lower()
+    if ext not in ALLOWED_VIDEO_EXTENSIONS:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Unsupported file type '{ext}'. Allowed: {', '.join(sorted(ALLOWED_VIDEO_EXTENSIONS))}",
+        )
+
+    dest_dir = os.path.join(settings.upload_path, str(user.tenant_id))
+    os.makedirs(dest_dir, exist_ok=True)
+    dest_path = os.path.join(dest_dir, f"{uuid.uuid4().hex}{ext}")
+
+    total_bytes = 0
+    try:
+        with open(dest_path, "wb") as f:
+            while True:
+                chunk = await video.read(UPLOAD_CHUNK_BYTES)
+                if not chunk:
+                    break
+                if shutil.disk_usage(settings.upload_path).free - len(chunk) < MIN_FREE_DISK_BYTES_AFTER_UPLOAD:
+                    raise HTTPException(
+                        status_code=status.HTTP_507_INSUFFICIENT_STORAGE,
+                        detail="Not enough free disk space on the server to accept this upload",
+                    )
+                f.write(chunk)
+                total_bytes += len(chunk)
+    except HTTPException:
+        if os.path.exists(dest_path):
+            os.remove(dest_path)
+        raise
+    except Exception:
+        if os.path.exists(dest_path):
+            os.remove(dest_path)
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Upload failed") from None
+
+    log_action(
+        db, action="CAMERA_VIDEO_UPLOADED", tenant_id=user.tenant_id, user_id=user.id,
+        resource_type="camera_video", resource_id=dest_path,
+        ip_address=request.client.host if request.client else "",
+        details={"filename": filename, "size_bytes": total_bytes},
+    )
+    return {"video_file_path": dest_path, "size_bytes": total_bytes}
 
 
 @router.patch("/{camera_id}", response_model=CameraResponse)

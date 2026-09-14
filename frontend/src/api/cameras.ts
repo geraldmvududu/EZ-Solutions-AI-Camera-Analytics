@@ -1,4 +1,4 @@
-import { API_URL, apiRequest, tokenStore } from "./client";
+import { API_URL, apiRequest, apiUpload, tokenStore } from "./client";
 import type { Camera } from "../types";
 
 export function getStreamUrl(cameraId: string): string {
@@ -39,3 +39,13 @@ export const updateCamera = (id: string, payload: Partial<CameraCreatePayload & 
 export const deleteCamera = (id: string) => apiRequest<void>(`/api/cameras/${id}`, { method: "DELETE" });
 export const testCameraConnection = (id: string) =>
   apiRequest<{ success: boolean; detail: string }>(`/api/cameras/${id}/test-connection`, { method: "POST" });
+
+// Lets an admin feed in footage from an external source (a hard drive, an old DVR
+// export, ...) instead of typing a server-side path by hand — the browser reads the
+// file from wherever it's actually stored and streams it to the backend, which
+// returns the resulting server-side path to use as video_file_path.
+export function uploadCameraVideo(file: File): Promise<{ video_file_path: string; size_bytes: number }> {
+  const form = new FormData();
+  form.set("video", file);
+  return apiUpload<{ video_file_path: string; size_bytes: number }>("/api/cameras/upload-video", form, "POST");
+}
