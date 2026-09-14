@@ -283,6 +283,24 @@ synthetic test fixtures) posted through the real `/api/faces/enroll` endpoint:
    need to be re-enrolled with a new photo through the UI — there's nothing left to
    patch in code for them.
 
+**Silent recognition-attempt skips are now logged with the real reason.**
+`ai-engine/app/core/face_recognizer.py::_maybe_recognize` has two early-return gates —
+a degenerate crop-bounds check and `face_embedding.assess_recognition_quality`'s
+pass/fail check — that previously discarded their reason with zero log output and zero
+`face_recognition_events` rows, making "why isn't recognition matching this enrolled
+person" undebuggable from outside the process. Found while setting up a real live demo
+(an enrolled person, a real recorded video of them, a tripwire) that produced
+`TRIPWIRE_VIOLATION` events and a correctly-cooled-down alert but zero recognized
+identity and zero `Incident` — elimination (checked `face_recognition_events`: zero
+rows; checked ai-engine logs: zero "recognize"/"face" lines) pointed at a silent gate,
+not a failed match. Both gates now `logger.info(...)` the real reason (`"No face
+detected"` / `"Face too small"` / `"Quality below threshold"` / degenerate crop) plus
+the actual measured `face_count`/`quality_score`/`blur_score`/`brightness_score`/
+`size_score`, mirroring the same real-data-over-guessing discipline already used for
+`gate_jump_trajectory_stats`. This is instrumentation only — it changes nothing about
+whether a recognition attempt passes or fails, only whether a human can find out why
+one didn't.
+
 **AI Video Intelligence, Phase 1** (`app/services/violation_service.py`,
 `ai-engine/app/core/tripwire_analysis.py`): extends the existing tripwire/zone
 pipeline rather than adding a parallel detection system — nearly everything the
@@ -714,7 +732,7 @@ cd backend && pytest -q      # 233 tests: auth, RBAC, tenant isolation, camera C
                               # incident_type) so a genuinely different incident type
                               # on the same camera — e.g. a real theft right after an
                               # unrelated gate-jump — still gets its own Incident)
-cd ai-engine && pytest -q    # 115 tests: centroid tracker (including type-aware
+cd ai-engine && pytest -q    # 116 tests: centroid tracker (including type-aware
                               # matching so a multi-class detector can't let a track
                               # of one object_type steal another's), zone/tripwire
                               # geometry, loitering timer, motion detection (real MOG2 background
@@ -724,7 +742,10 @@ cd ai-engine && pytest -q    # 115 tests: centroid tracker (including type-aware
                               # per-camera recognition_cooldown_seconds override over the
                               # static env var, zone filtering, identity tracking/expiry
                               # for the violation correlation, liveness frame-diff
-                              # rejection, exception-safety — a recognition bug must never
+                              # rejection, a skipped-attempt's real reason (degenerate
+                              # crop bounds / no face detected / face too small / low
+                              # quality score) now being logged instead of silently
+                              # discarded, exception-safety — a recognition bug must never
                               # stop the capture loop), SegmentRecorder
                               # (create-at-start/finalize-at-stop, the ffmpeg H.264
                               # transcode step and its fallback paths, and the evidence-
